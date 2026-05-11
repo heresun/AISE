@@ -1,0 +1,24 @@
+{
+  "name": "aise",
+  "version": "1.0.0",
+  "description": "AISE 过程增强审查机制 v2 — 编排大小模型分工、TDD 前置、多 persona 审查、智能熔断、知识沉淀闭环，全套跨平台 Python 实现",
+  "author": {
+    "name": "David",
+    "url": "https://github.com/focus-tech"
+  },
+  "homepage": "https://github.com/focus-tech/aise",
+  "repository": "https://github.com/focus-tech/aise",
+  "license": "MIT",
+  "keywords": [
+    "aise",
+    "code-review",
+    "tdd",
+    "compound-engineering",
+    "workflow",
+    "agent-orchestration",
+    "multi-persona-review",
+    "circuit-breaker",
+    "knowledge-compound",
+    "cross-platform"
+  ]
+}
