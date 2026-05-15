@@ -41,6 +41,16 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, Agent, TaskCreate, Ta
 
 未获批准时不进入后续步骤。
 
+**ExitPlanMode 后立即锁定 plan**（v1.1 新增，方案 A 子项 2）：
+
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_snapshot.py" create --task-title "$ARGUMENTS"
+```
+
+会基于当前 `.aise/plan.md` 生成 `plan.snapshot.json` + `plan.snapshot.sha256`。下游所有 gate（verify / fuse / dashboard）启动时第一件事就是校验 snapshot 未被篡改，关闭"中途偷换 plan"的窗口。
+
+校验失败时它们会 exit 2 + snapshot_tampered 退出，必须重新走 ExitPlanMode 锁定新 snapshot 才能续跑。
+
 ### 步骤 3：任务分割阶段（DAG）（优化④）
 
 调用 **`aise-planning-with-files`** skill，输出包含以下字段的 DAG：
@@ -72,7 +82,7 @@ tasks:
 
 3. **使用 SubAgent 隔离上下文**：通过 `Agent` 工具派发到独立子代理（`subagent_type: general-purpose` 或 `Explore`），加 `isolation: worktree` 避免污染
 
-### 步骤 5：客观验证门禁（硬门禁）（优化①）
+### 步骤 5：客观验证门禁（硬门禁）（优化① + v1.1 machine signoff）
 
 调用 **`aise-verification-before-completion`** skill，并强制执行：
 
@@ -80,10 +90,27 @@ tasks:
 python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_verify.py"
 ```
 
-脚本会：
+脚本会（v1.1 新增能力以 ⬅ 标注）：
+- ⬅ 启动门禁：校验 `plan.snapshot.json` 未被篡改（snapshot 不存在则跳过）
 - 自动检测项目类型（Maven/Gradle/npm/Python）
+- ⬅ **工具预检**：每个 runner 跑前先查 PATH 上有无对应 bin，缺失直接 exit 127 并打印平台特定安装命令（brew/apt/winget）
 - 运行测试、Lint、类型检查
-- 任一失败 → 退出码非 0 → 强制返回步骤 4 重试
+- ⬅ **evidence 签收**：每个 runner 产出的 JUnit XML / 命令 stdout 转储被 sha256 + mtime 记录到 `.aise/runs/<run_id>/evidence.jsonl`
+- 任一失败 → 退出码 1 → 强制返回步骤 4 重试
+
+退出码语义：
+- `0` 通过 + evidence 链已签收
+- `1` 业务失败（测试红）
+- `2` 状态异常（snapshot 不存在/被篡改）
+- `127` 环境异常（必需工具缺失）
+
+**evidence 复核**（步骤 6 调用前可选执行）：
+
+```
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_verify.py" --verify-evidence
+```
+
+重新读取最近一次 run 的 `evidence.jsonl`，对每个 artifact 重算 sha256 + 检查 mtime 仍在生成窗口内（容忍 ±2s）。任何篡改 → exit 1 列出违规项。审查阶段不再信任 Agent 自报"测试通过了"，而是用机器签收做信任根。
 
 ### 步骤 6：多 Persona 审查（软门禁）（优化②⑥）
 
@@ -133,3 +160,13 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_dashboard.py"
 - 遵循 KISS：能复用 Skill 就不要重写
 - 全程中文交流，焦小糖人设保持
 - 所有 `aise-*` Skill 均为本插件自带的副本，无需依赖外部插件
+
+## v1.1 升级（方案 A）
+
+本版本不引入 Node.js / `.cjs` 重写，仅在原 Python 脚本上增加 3 个高 ROI 子项：
+
+1. **machine signoff** — `aise_verify.py` 每个 runner 产出的 evidence（JUnit XML / stdout）经 sha256 + mtime 签收，写 `.aise/runs/<run_id>/evidence.jsonl`，下游可 `--verify-evidence` 复核
+2. **plan snapshot 防篡改** — `aise_snapshot.py create` 在用户 ExitPlanMode 后锁定 plan，所有 gate 启动校验 sha256，关闭中途篡改窗口
+3. **工具预检 + 安装指引** — 缺 mvn/gradle/npm/pytest 时 fail-fast exit 127 + brew/apt/winget 命令
+
+v3.2.5 文档里的 targetCovers / `--pipe` runner / Node 重写等高复杂度子项**未实施**，待 Spike 后再评估必要性。
