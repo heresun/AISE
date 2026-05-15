@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AISE 智能熔断判断（优化⑤）- 跨平台 Python 版
 
-退出码：0 = 未触发；2 = 触发熔断
+退出码：0 = 未触发；2 = 触发熔断 / snapshot 失败
 """
 import argparse
 import json
@@ -10,6 +10,9 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import snapshot as snap_lib  # noqa: E402
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AISE 智能熔断")
@@ -17,10 +20,16 @@ def main() -> int:
     parser.add_argument("--repeat-threshold", type=int, default=2, help="同类错误重复阈值")
     parser.add_argument("--token-budget", type=int, default=200000, help="累计 token 上限")
     parser.add_argument("--blast-radius", type=int, default=15, help="文件改动数上限")
+    parser.add_argument("--skip-snapshot-check", action="store_true", help="跳过 plan snapshot 校验")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
     aise_dir = project_root / ".aise"
+
+    # gate 启动门禁：plan.snapshot.json 防篡改
+    if not args.skip_snapshot_check and (aise_dir / "plan.snapshot.json").exists():
+        snap_lib.require_snapshot(project_root, gate_name="fuse")
+
     log_path = aise_dir / "error_patterns.jsonl"
 
     if not log_path.exists():

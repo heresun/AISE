@@ -2,6 +2,7 @@
 """AISE 健康度仪表盘（优化⑩）- 跨平台 Python 版
 
 读取 .aise/metrics.jsonl 与 .aise/error_patterns.jsonl，生成 markdown 报表。
+v1.1 新增：启动时校验 plan.snapshot.json 防篡改（如已存在）。
 """
 import argparse
 import json
@@ -9,6 +10,9 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import snapshot as snap_lib  # noqa: E402
 
 
 def load_jsonl(path: Path):
@@ -27,6 +31,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", default=None)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--skip-snapshot-check", action="store_true")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
@@ -37,6 +42,11 @@ def main() -> int:
     )
 
     aise_dir = project_root / ".aise"
+
+    # gate 启动门禁
+    if not args.skip_snapshot_check and (aise_dir / "plan.snapshot.json").exists():
+        snap_lib.require_snapshot(project_root, gate_name="dashboard")
+
     metrics_path = aise_dir / "metrics.jsonl"
     error_path = aise_dir / "error_patterns.jsonl"
 
