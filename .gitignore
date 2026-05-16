@@ -23,3 +23,6 @@ Thumbs.db
 # AISE 运行时产物（每个使用方项目的 plan/runs/metrics 目录，不入插件库）
 .aise/
 .pytest_cache/
+
+# Java/Maven 构建产物（fixture 跑 mvn test 后产生）
+target/

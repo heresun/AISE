@@ -32,10 +32,13 @@ from typing import List
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import event_runner as er
 from lib import evidence as ev_lib
+from lib import surefire_collector as sc_lib
 
 
 # 默认允许的 target glob（Spike-1 简化：白名单写死）
 DEFAULT_ALLOWED_PATTERNS = ["./pkg/**", "./internal/**", "./cmd/**", "./...", "./pkg/...", "./internal/...", "./cmd/..."]
+# Maven 测试选择器白名单（v3.2.5 §4.4.5：跨 pipe 各自定义 allowed_patterns）
+DEFAULT_MVN_ALLOWED_PATTERNS = ["*Test", "*Tests", "*IT", "*Test#*", "*Tests#*", "*IT#*", "*"]
 
 
 def _now_ms() -> int:
@@ -210,6 +213,143 @@ def run_go_pipe(
     return (0 if test_ok else 1), summary
 
 
+def _parse_surefire_targets(junit_files: List[Path]) -> List[dict]:
+    """聚合多个 Surefire/Failsafe XML → actual_test_targets[]（v3.2.5 §4.1）
+
+    每个 testcase 携带 source_artifact_path（去重 key 一部分），
+    供 Surefire vs Failsafe 同名 testcase 按 source 区分（应 P1-B）。
+    """
+    targets: List[dict] = []
+    for jx in junit_files:
+        if not jx.exists():
+            continue
+        try:
+            tree = ET.parse(jx)
+        except ET.ParseError:
+            continue
+        root = tree.getroot()
+        suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
+        rel_path = str(jx)
+        for suite in suites:
+            pkg = suite.attrib.get("name", "")  # Surefire 通常是 fully-qualified class name
+            for case in suite.findall("testcase"):
+                classname = case.attrib.get("classname", "")
+                name = case.attrib.get("name", "")
+                # Surefire 把 package 放在 classname（"sample.CalcTest"），suite.name 同
+                parent_package = classname.rsplit(".", 1)[0] if "." in classname else pkg
+                targets.append({
+                    "kind": "testcase",
+                    "id": name,
+                    "parent_class": classname,
+                    "parent_package": parent_package,
+                    "parent_file": "",
+                    "granularity": "testcase",
+                    "source": "junit_xml",
+                    "source_artifact_path": rel_path,
+                    "passed": case.find("failure") is None and case.find("error") is None,
+                })
+    return targets
+
+
+def run_mvn_surefire_pipe(
+    project_root: Path,
+    out_dir: Path,
+    run_id: str,
+    mvn_bin: str,
+    extra_system_props: List[str],
+    skip_failsafe: bool = True,
+) -> tuple[int, dict]:
+    """执行 mvn test [systemProps] → collect_surefire_xmls → 聚合 actual_test_targets。
+
+    extra_system_props: ["forceFail=true", ...]，会被转为 -DforceFail=true。
+    skip_failsafe: True 时仅跑 surefire（mvn test），False 跑 surefire + failsafe（mvn verify）。
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stdout_dump = out_dir / f"mvn-{run_id}.stdout.log"
+    stderr_dump = out_dir / f"mvn-{run_id}.stderr.log"
+
+    window_start = _now_ms()
+
+    mvn_goal = "test" if skip_failsafe else "verify"
+    cmd = [mvn_bin, "-B", "-q", mvn_goal]
+    for kv in extra_system_props:
+        cmd.append(f"-D{kv}")
+
+    mvn_proc = subprocess.run(
+        cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    stdout_dump.write_text(mvn_proc.stdout, encoding="utf-8")
+    stderr_dump.write_text(mvn_proc.stderr, encoding="utf-8")
+
+    window_end = _now_ms()
+    test_ok = (mvn_proc.returncode == 0)
+
+    # 收 surefire/failsafe XML 到 out_dir
+    collect_result = sc_lib.collect_surefire_xmls(project_root, out_dir)
+    collected = collect_result["collected"]
+
+    # 解析聚合 actual_test_targets
+    junit_paths = [Path(r["dst"]) for r in collected]
+    actual_targets = _parse_surefire_targets(junit_paths)
+
+    # 收 evidence：每个 collected XML + stdout/stderr dump
+    artifacts = []
+    for rec in collected:
+        ev = ev_lib.collect_artifact(
+            path=Path(rec["dst"]),
+            runner=f"mvn-surefire/{rec['origin']}",
+            window_start_ms=window_start,
+            window_end_ms=window_end,
+            source="junit_xml",
+            ok=test_ok,
+            project_root=project_root,
+        )
+        if ev:
+            artifacts.append(ev)
+    for path, source in [(stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
+        ev = ev_lib.collect_artifact(
+            path=path,
+            runner="mvn-surefire",
+            window_start_ms=window_start,
+            window_end_ms=window_end,
+            source=source,
+            ok=test_ok,
+            project_root=project_root,
+        )
+        if ev:
+            artifacts.append(ev)
+
+    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
+
+    pipeline_ok = len(collected) > 0  # 至少一个 JUnit XML 落盘视为 pipeline 健康
+
+    summary = {
+        "pipe": "mvn-surefire",
+        "run_id": run_id,
+        "project_root": str(project_root),
+        "mvn_goal": mvn_goal,
+        "extra_system_props": extra_system_props,
+        "collected": collected,
+        "stdout_dump": str(stdout_dump),
+        "stderr_dump": str(stderr_dump),
+        "evidence_jsonl": str(ev_path),
+        "window_start_ms": window_start,
+        "window_end_ms": window_end,
+        "test_exit_code": mvn_proc.returncode,
+        "actual_test_targets": actual_targets,
+        "test_ok": test_ok,
+        "junit_ok": pipeline_ok,
+        "collect_warnings": collect_result["warnings"],
+    }
+
+    if not pipeline_ok:
+        return 2, summary
+    return (0 if test_ok else 1), summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AISE pipe runner")
     parser.add_argument("--pipe", required=True, help="Pipe 名称（见 PIPE_DEFS）")
@@ -222,6 +362,10 @@ def main() -> int:
                         help="JUnit XML 输出目录（默认 .aise/runs/<run_id>/test_reports）")
     parser.add_argument("--summary-json", default=None,
                         help="把 summary 写到指定文件（默认 stdout）")
+    parser.add_argument("--mvn-system-property", action="append", default=[],
+                        help="mvn-surefire 专用：透传 -DKEY=VALUE，可重复")
+    parser.add_argument("--mvn-include-failsafe", action="store_true",
+                        help="mvn-surefire 改跑 mvn verify 含 failsafe")
     args = parser.parse_args()
 
     # Step 1: preflight
@@ -233,9 +377,14 @@ def main() -> int:
         _emit_preflight_diagnostic(info)
         return er.EXIT_CODE_TOOL_MISSING
 
-    # Step 2: defense in depth
-    allowed = args.allowed_pattern if args.allowed_pattern else DEFAULT_ALLOWED_PATTERNS
-    targets = args.target or ["./..."]
+    # Step 2: defense in depth（每个 pipe 用各自的默认 allowed_patterns）
+    if args.allowed_pattern:
+        allowed = args.allowed_pattern
+    elif args.pipe == "mvn-surefire":
+        allowed = DEFAULT_MVN_ALLOWED_PATTERNS
+    else:
+        allowed = DEFAULT_ALLOWED_PATTERNS
+    targets = args.target or (["./..."] if args.pipe != "mvn-surefire" else [])
     ok2, info2 = er.defense_in_depth_check(targets, allowed)
     if not ok2:
         print(f"[AISE-event] FAIL: defense-in-depth 拦截 target={info2.get('target')!r}",
@@ -258,8 +407,17 @@ def main() -> int:
             run_id=run_id,
             junit_bin=info["found"],
         )
+    elif args.pipe == "mvn-surefire":
+        exit_code, summary = run_mvn_surefire_pipe(
+            project_root=project_root,
+            out_dir=out_dir,
+            run_id=run_id,
+            mvn_bin=info["found"],
+            extra_system_props=args.mvn_system_property,
+            skip_failsafe=not args.mvn_include_failsafe,
+        )
     else:
-        print(f"[AISE-event] Spike-1 仅实现 go-test-json-to-junit；{args.pipe} 待 Spike-2/3",
+        print(f"[AISE-event] Spike-2 已支持 go-test-json-to-junit + mvn-surefire；{args.pipe} 待 Spike-3",
               file=sys.stderr)
         return 2
 
