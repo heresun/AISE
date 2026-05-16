@@ -19,3 +19,7 @@ Thumbs.db
 *.log
 *.bak
 *.tmp
+
+# AISE 运行时产物（每个使用方项目的 plan/runs/metrics 目录，不入插件库）
+.aise/
+.pytest_cache/
