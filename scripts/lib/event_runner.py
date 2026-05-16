@@ -144,15 +144,31 @@ def preflight_pipe(pipe_name: str) -> Tuple[bool, Dict[str, Any]]:
 # -------------------- defense_in_depth_check --------------------
 
 
+def _normalize_path(path: str) -> str:
+    """跨平台路径分隔符归一：`\\` → `/`，保留其他字符不变。
+
+    v3.3 P0-2：Windows target 通常用反斜杠（`.\\pkg\\foo`），allowed_patterns
+    用正斜杠（`./pkg/**`）。归一后再 fnmatch 才能正确匹配。
+
+    安全注意：归一仅在 fnmatch 比对前做，不改变实际文件系统调用的 target，
+    且 `..\\..\\etc\\passwd` 归一后仍是 `../../etc/passwd`，白名单照样拦截。
+    """
+    if not path:
+        return path
+    return path.replace("\\", "/")
+
+
 def _matches_any(target: str, patterns: Iterable[str]) -> bool:
-    """glob 风格匹配，兼容 ** 任意深度通配。"""
+    """glob 风格匹配，兼容 ** 任意深度通配 + 跨平台路径分隔符归一。"""
+    norm_target = _normalize_path(target)
     for pat in patterns:
-        if fnmatch.fnmatchcase(target, pat):
+        norm_pat = _normalize_path(pat)
+        if fnmatch.fnmatchcase(norm_target, norm_pat):
             return True
         # fnmatch 不天然支持 **，手动归一：把 ** 视为 *（fnmatch 的 * 已包含 /）
-        if "**" in pat:
-            relaxed = pat.replace("**", "*")
-            if fnmatch.fnmatchcase(target, relaxed):
+        if "**" in norm_pat:
+            relaxed = norm_pat.replace("**", "*")
+            if fnmatch.fnmatchcase(norm_target, relaxed):
                 return True
     return False
 

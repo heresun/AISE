@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,9 @@ PathLike = Union[str, Path]
 DEFAULT_TIMEOUT_MS = 5000
 DEFAULT_RETRY_INTERVAL_MS = 50
 DEFAULT_STALE_THRESHOLD_MS = 600_000  # 10 分钟
+
+# Windows GetExitCodeProcess 返回值：进程仍存活 → STILL_ACTIVE (259)
+STILL_ACTIVE = 259
 
 
 def _now_iso() -> str:
@@ -58,12 +62,54 @@ def _parse_iso_ms(iso: str) -> int:
         return 0
 
 
-def _check_pid_alive(pid: int) -> bool:
-    """探测 pid 是否仍存活。跨平台。"""
-    if pid <= 0:
+def _check_pid_alive_windows(pid: int) -> bool:
+    """Windows 显式 OpenProcess + GetExitCodeProcess 探测（v3.3 P0-3）。
+
+    Python 自带 os.kill(pid, 0) 在 Windows 上对"进程退出但 handle 未释放"
+    场景**误判存活**——会让 stale 锁永远清不掉，gate 卡死。
+
+    这里直接调 kernel32 API：
+      1. OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+      2. GetExitCodeProcess(handle, &exit_code)
+      3. 若 exit_code == STILL_ACTIVE (259) → 活
+      4. 若 OpenProcess 返回 NULL → 已死或不存在
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        # 非 Windows 系统不应到这里，但万一被强制调用时退到 POSIX fallback
+        return _check_pid_alive_posix(pid)
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # OpenProcess 失败：进程不存在或权限拒绝
+        # ERROR_ACCESS_DENIED (5) 意味进程存在但归别人 → 仍视为活
+        if ctypes.get_last_error() == 5:
+            return True
         return False
     try:
-        os.kill(pid, 0)  # signal 0 仅探测，不发信号
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return False
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _check_pid_alive_posix(pid: int) -> bool:
+    """POSIX 路径：os.kill(pid, 0) 信号 0 仅探测不发信号。"""
+    try:
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -72,6 +118,15 @@ def _check_pid_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _check_pid_alive(pid: int) -> bool:
+    """探测 pid 是否仍存活。跨平台分发。"""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        return _check_pid_alive_windows(pid)
+    return _check_pid_alive_posix(pid)
 
 
 def _read_holder(lock_dir: Path) -> Dict[str, Any]:
