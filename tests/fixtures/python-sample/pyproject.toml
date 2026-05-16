@@ -1,0 +1,8 @@
+[project]
+name = "aise-spike3-sample"
+version = "0.0.1"
+description = "Spike-3 pytest fixture（最小 Python 项目）"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

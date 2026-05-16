@@ -1,0 +1,26 @@
+{
+  "name": "aise-spike3-jest-sample",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Spike-3 jest fixture（最小 Jest 项目）",
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "29.7.0",
+    "jest-junit": "16.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "reporters": [
+      "default",
+      [
+        "jest-junit",
+        {
+          "outputDirectory": ".",
+          "outputName": "junit.xml"
+        }
+      ]
+    ]
+  }
+}

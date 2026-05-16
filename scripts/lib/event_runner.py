@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import shutil
+import subprocess
 from typing import Any, Dict, Iterable, List, Tuple
 
 from lib.preflight import detect_platform
@@ -38,21 +39,22 @@ PIPE_DEFS: Dict[str, Dict[str, Any]] = {
     },
     "pytest-junitxml": {
         "bin": "pytest",
+        "alt_bins": ["python3 -m pytest", "python -m pytest"],
         "purpose": "pytest 内置 --junit-xml 产出",
         "install": {
-            "Darwin":  "pip3 install pytest",
-            "Linux":   "pip3 install pytest",
-            "Windows": "pip install pytest",
+            "Darwin":  "pip3 install --user pytest",
+            "Linux":   "pip3 install --user pytest",
+            "Windows": "pip install --user pytest",
         },
     },
     "jest-junit": {
-        "bin": "jest",
+        "bin": "node",  # Jest 通常 fixture 内 ./node_modules/.bin/jest，preflight 仅校验 node 在 PATH
         "npm_dep": "jest-junit",
         "purpose": "Jest reporter jest-junit 产出 JUnit XML",
         "install": {
-            "Darwin":  "npm install --save-dev jest-junit",
-            "Linux":   "npm install --save-dev jest-junit",
-            "Windows": "npm install --save-dev jest-junit",
+            "Darwin":  "brew install node && (cd <project> && npm install --save-dev jest jest-junit)",
+            "Linux":   "apt install nodejs npm && (cd <project> && npm install --save-dev jest jest-junit)",
+            "Windows": "winget install OpenJS.NodeJS && (cd <project> && npm install --save-dev jest jest-junit)",
         },
     },
     "cargo-test-junit": {
@@ -79,11 +81,28 @@ PIPE_DEFS: Dict[str, Dict[str, Any]] = {
 # -------------------- preflight_pipe --------------------
 
 
+def _python_module_available(python_bin: str, module: str) -> bool:
+    """用实际 python -c 'import X' 验证模块在该 python 上可用。"""
+    try:
+        r = subprocess.run(
+            [python_bin, "-c", f"import {module}"],
+            capture_output=True,
+            timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def preflight_pipe(pipe_name: str) -> Tuple[bool, Dict[str, Any]]:
     """检查 pipe 工具是否可用。
 
+    优先级：
+      1. PATH 上的主 bin（直接命令，如 mvn / go-junit-report）
+      2. alt_bins 中含 `-m` 的复合命令（如 python3 -m pytest），实际 import 验证
+
     返回：
-      成功 → (True, {"bin": str, "found": str, "name": pipe_name})
+      成功 → (True, {"bin": str, "found": str, "name": pipe_name, "via": "path"|"alt"})
       未知 pipe → (False, {"code": "pipe_unknown", "name": pipe_name})
       工具缺失 → (False, {"code": "pipe_tool_missing", "bin": ..., "platform": ...,
                           "install_hint": ..., "docs": ..., "name": pipe_name})
@@ -95,7 +114,19 @@ def preflight_pipe(pipe_name: str) -> Tuple[bool, Dict[str, Any]]:
     bin_name = dep["bin"]
     found = shutil.which(bin_name)
     if found:
-        return True, {"bin": bin_name, "found": found, "name": pipe_name}
+        return True, {"bin": bin_name, "found": found, "name": pipe_name, "via": "path"}
+
+    # 尝试 alt_bins（python -m 形式）
+    for alt in dep.get("alt_bins", []):
+        if " -m " not in alt:
+            continue
+        parts = alt.split()
+        py_bin = shutil.which(parts[0])
+        if not py_bin:
+            continue
+        module = parts[parts.index("-m") + 1]
+        if _python_module_available(py_bin, module):
+            return True, {"bin": bin_name, "found": alt, "name": pipe_name, "via": "alt"}
 
     pf = detect_platform()
     install_hint = dep["install"].get(pf) or dep["install"].get("Linux", "")

@@ -1,0 +1,11 @@
+[package]
+name = "aise_spike3_cargo_sample"
+version = "0.1.0"
+edition = "2021"
+description = "Spike-3 cargo-test-junit fixture（最小 Rust 项目）"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

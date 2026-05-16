@@ -24,5 +24,12 @@ Thumbs.db
 .aise/
 .pytest_cache/
 
-# Java/Maven 构建产物（fixture 跑 mvn test 后产生）
+# Java/Maven + Rust 构建产物（fixture 跑 mvn test / cargo test 后产生）
 target/
+
+# Node/Jest 依赖（fixture 跑 npm install 后产生）
+node_modules/
+package-lock.json
+
+# Rust Cargo.lock（lib fixture 不入库 lock，避免锁版本）
+Cargo.lock
