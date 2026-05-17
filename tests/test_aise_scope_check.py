@@ -21,7 +21,11 @@ SCOPE_CHECK = SCRIPTS / "aise_scope_check.py"
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd),
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
 
 
 def _init_git(cwd: Path) -> None:
@@ -65,6 +69,7 @@ def _setup_project(tmp_path: Path, scope_paths: list[str]) -> Path:
     r = subprocess.run(
         [sys.executable, str(RUN_INIT), "--project-root", str(proj)],
         capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, r.stderr
     return proj
@@ -77,7 +82,10 @@ def _run_scope_check(
            "--project-root", str(project_root), "--task-id", task_id]
     if extra:
         cmd += extra
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(
+        cmd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=30,
+    )
 
 
 # ----------------------------- 基础路径 -----------------------------
@@ -172,6 +180,7 @@ def test_scope_check_different_task_id_uses_different_scope(tmp_path: Path) -> N
     r = subprocess.run(
         [sys.executable, str(RUN_INIT), "--project-root", str(proj)],
         capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0
 

@@ -263,6 +263,8 @@ def _git_info(project_root: Path) -> Dict[str, str]:
                 cwd=str(project_root),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             info[label] = r.stdout.strip() if r.returncode == 0 else ""

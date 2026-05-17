@@ -12,6 +12,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 所有 job 强制 UTF-8 stdio（Windows 默认 cp1252 会让中文 stderr / argparse 报错）
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
+
 jobs:
   # ------------------------------------------------------------
   # 核心 Python 单元测试（跨平台）

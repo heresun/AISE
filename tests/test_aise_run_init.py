@@ -40,6 +40,8 @@ def _run(project_root: Path) -> subprocess.CompletedProcess:
         [sys.executable, str(RUN_INIT), "--project-root", str(project_root)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 

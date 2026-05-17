@@ -71,6 +71,8 @@ def _run_git(project_root: Path, *args: str) -> Tuple[int, str, str]:
             cwd=str(project_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
