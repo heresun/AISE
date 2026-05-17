@@ -41,32 +41,56 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, Agent, TaskCreate, Ta
 
 未获批准时不进入后续步骤。
 
-**ExitPlanMode 后立即锁定 plan**（v1.1 新增，方案 A 子项 2）：
+**ExitPlanMode 后立即锁定 plan**（v1.1 + v3.3 架构）：
+
+v1.1 方式（旧，仅 snapshot）：
 
 ```bash
 python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_snapshot.py" create --task-title "$ARGUMENTS"
 ```
 
-会基于当前 `.aise/plan.md` 生成 `plan.snapshot.json` + `plan.snapshot.sha256`。下游所有 gate（verify / fuse / dashboard）启动时第一件事就是校验 snapshot 未被篡改，关闭"中途偷换 plan"的窗口。
+**v3.3 推荐方式（一步到位：plan 校验 + snapshot + run_id 分配 + run_context）**：
 
-校验失败时它们会 exit 2 + snapshot_tampered 退出，必须重新走 ExitPlanMode 锁定新 snapshot 才能续跑。
+```bash
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_run_init.py" \
+    --project-root "$(pwd)" \
+    --task-title-override "$ARGUMENTS"
+```
+
+`aise_run_init.py` 串起整个 run lifecycle：
+1. 解析 `.aise/plan.json`（详见 `docs/plan-schema.md`）
+2. 校验：schema_version / task_title / 每个 task 的 task_id+scope.paths+test_manifest.pipe / dependencies 无环 / shared_evidence scope 相交
+3. 失败 → exit 2 + 列出违规项
+4. 通过 → 创建 `plan.snapshot.json` + `.sha256` + 新 `run_id`（`YYYYMMDD-HHMMSS-<6hex>`）
+5. 写 `.aise/runs/<run_id>/run_context.json` 给下游 gate 使用
+
+下游所有 gate（scope_check / verify / fuse / dashboard）启动时第一件事就是校验 snapshot 未被篡改 + 在 `run_context.json` 中找当前 task 的 scope 与配置，关闭"中途偷换 plan"的窗口。
+
+校验失败时它们会 exit 2 + snapshot_tampered 退出，必须重新跑 aise_run_init.py 才能续跑。
 
 ### 步骤 3：任务分割阶段（DAG）（优化④）
 
-调用 **`aise-planning-with-files`** skill，输出包含以下字段的 DAG：
+调用 **`aise-planning-with-files`** skill，产出 `.aise/plan.json`（机器可读）+ `.aise/plan.md`（人类可读），plan.json 字段定义见 [`docs/plan-schema.md`](../docs/plan-schema.md)：
 
-```yaml
-tasks:
-  - id: T1
-    description: ...
-    depends_on: []
-    critical_path: true
-    parallel_group: A
-    estimated_tokens: 5000
-    acceptance_criteria: [AC1, AC2]
+```json
+{
+  "schema_version": "1.0",
+  "task_title": "...",
+  "tasks": [
+    {
+      "task_id": "T-001",
+      "title": "...",
+      "scope": {"paths": ["src/**", "tests/**"]},
+      "acceptance": "...",
+      "test_manifest": {"pipe": "pytest-junitxml", "targets": ["tests"]},
+      "dependencies": [],
+      "shared_evidence_tasks": []
+    }
+  ]
+}
 ```
 
-写入 `.aise/plan.md`。
+`test_manifest.pipe` 必须是 v3.3 支持的 5 种之一：`go-test-json-to-junit` / `mvn-surefire` / `pytest-junitxml` / `jest-junit` / `cargo-test-junit`。
 
 ### 步骤 4：任务执行阶段（小模型 + TDD）（优化③⑥⑨）
 
@@ -81,6 +105,21 @@ tasks:
 2. **TDD 强制前置**：调用 **`aise-test-driven-development`** skill 完成 Red → Green → Refactor
 
 3. **使用 SubAgent 隔离上下文**：通过 `Agent` 工具派发到独立子代理（`subagent_type: general-purpose` 或 `Explore`），加 `isolation: worktree` 避免污染
+
+4. **Scope Gate（v3.3 架构）**：worker 完成代码改动后、commit 前强校验：
+
+   ```bash
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_scope_check.py" \
+       --project-root "$(pwd)" \
+       --task-id "T-001"
+   ```
+
+   读最新 `.aise/runs/<run_id>/run_context.json`，校验 `git diff` 中所有变更文件都落在 task.scope.paths 之内：
+   - exit 0：通过
+   - exit 1：越界（列出违规文件 + scope）→ worker 必须回退非范围内的改动
+   - exit 2：状态异常（run_context 缺 / snapshot 篡改 / task_id 未知）
+
+5. **客观验证门禁**：见步骤 5 → `aise_verify.py`，整体复用 plan.snapshot + evidence 链路
 
 ### 步骤 5：客观验证门禁（硬门禁）（优化① + v1.1 machine signoff）
 

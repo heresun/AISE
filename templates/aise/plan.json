@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "task_title": "（请填写任务标题）",
+  "tasks": [
+    {
+      "task_id": "T-001",
+      "title": "（任务一标题）",
+      "scope": {
+        "paths": [
+          "src/**",
+          "tests/**"
+        ]
+      },
+      "acceptance": "（人类可读的验收标准）",
+      "test_manifest": {
+        "pipe": "pytest-junitxml",
+        "targets": ["tests"]
+      },
+      "dependencies": [],
+      "shared_evidence_tasks": []
+    }
+  ]
+}
