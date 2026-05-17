@@ -13,7 +13,8 @@ from __future__ import annotations
 import fnmatch
 import shutil
 import subprocess
-from typing import Any, Dict, Iterable, List, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
 
 from lib.preflight import detect_platform
 
@@ -48,7 +49,8 @@ PIPE_DEFS: Dict[str, Dict[str, Any]] = {
         },
     },
     "jest-junit": {
-        "bin": "node",  # Jest 通常 fixture 内 ./node_modules/.bin/jest，preflight 仅校验 node 在 PATH
+        "bin": "node",  # preflight 仅校验 node 在 PATH
+        "runtime_bin": "./node_modules/.bin/jest",  # runtime 优先 fixture 内
         "npm_dep": "jest-junit",
         "purpose": "Jest reporter jest-junit 产出 JUnit XML",
         "install": {
@@ -58,7 +60,8 @@ PIPE_DEFS: Dict[str, Dict[str, Any]] = {
         },
     },
     "cargo-test-junit": {
-        "bin": "cargo2junit",
+        "bin": "cargo2junit",     # preflight 校验 cargo2junit
+        "runtime_bin": "cargo",   # runtime 真正调 cargo（cargo2junit 是过滤器）
         "purpose": "把 cargo test --message-format=json 转 JUnit",
         "install": {
             "Darwin":  "cargo install cargo2junit",
@@ -138,6 +141,105 @@ def preflight_pipe(pipe_name: str) -> Tuple[bool, Dict[str, Any]]:
         "platform": pf,
         "install_hint": install_hint,
         "docs": dep.get("docs", ""),
+    }
+
+
+# -------------------- resolve_runtime_bin (v3.3 P1-1) --------------------
+
+
+def resolve_runtime_bin(
+    pipe_name: str,
+    project_root: Path,
+) -> Tuple[bool, Dict[str, Any]]:
+    """解析 pipe 的 runtime bin（v3.3 P1-1 设计教训内化）。
+
+    与 preflight_pipe 的关系：
+      - preflight 验证"工具链可用"（runner 跑前 fail-fast）
+      - runtime 解析"实际执行哪个 bin"（runner spawn 用）
+
+    PIPE_DEFS.runtime_bin 字段（可选）形式：
+      - 缺省       → 用 preflight bin（PATH 上找），via="preflight_default"
+      - 字符串相对 → "./node_modules/.bin/jest"，via="project_local"
+      - 字符串绝对 → PATH 上查找该 bin，via="path_lookup"
+      - callable   → resolver(project_root) → str，via="callable_resolver"
+
+    返回：
+      ok → (True, {"bin": str, "path": str, "via": str})
+      失败 → (False, {"code": "pipe_unknown" | "runtime_bin_missing", ...})
+    """
+    dep = PIPE_DEFS.get(pipe_name)
+    if dep is None:
+        return False, {"code": "pipe_unknown", "name": pipe_name}
+
+    runtime_bin = dep.get("runtime_bin")
+
+    # 路径 1：缺省 → 等价 preflight bin
+    if runtime_bin is None:
+        bin_name = dep["bin"]
+        found = shutil.which(bin_name)
+        if not found:
+            return False, {
+                "code": "runtime_bin_missing",
+                "bin": bin_name,
+                "expected_path": f"$PATH/{bin_name}",
+                "via_attempted": "preflight_default",
+            }
+        return True, {
+            "bin": bin_name,
+            "path": found,
+            "via": "preflight_default",
+        }
+
+    # 路径 2：callable resolver
+    if callable(runtime_bin):
+        resolved = runtime_bin(project_root)
+        if not resolved:
+            return False, {
+                "code": "runtime_bin_missing",
+                "expected_path": "<callable_resolver returned empty>",
+                "via_attempted": "callable_resolver",
+            }
+        return True, {
+            "bin": Path(resolved).name,
+            "path": str(resolved),
+            "via": "callable_resolver",
+        }
+
+    # 路径 3：字符串相对路径（./ 或 ../ 开头）→ project_root 相对
+    if isinstance(runtime_bin, str) and (runtime_bin.startswith("./") or runtime_bin.startswith("../")):
+        candidate = (project_root / runtime_bin).resolve()
+        if not candidate.exists():
+            return False, {
+                "code": "runtime_bin_missing",
+                "bin": Path(runtime_bin).name,
+                "expected_path": str(candidate),
+                "via_attempted": "project_local",
+            }
+        return True, {
+            "bin": candidate.name,
+            "path": str(candidate),
+            "via": "project_local",
+        }
+
+    # 路径 4：字符串绝对 / 纯 bin 名 → PATH 上查找
+    if isinstance(runtime_bin, str):
+        found = shutil.which(runtime_bin)
+        if not found:
+            return False, {
+                "code": "runtime_bin_missing",
+                "bin": runtime_bin,
+                "expected_path": f"$PATH/{runtime_bin}",
+                "via_attempted": "path_lookup",
+            }
+        return True, {
+            "bin": runtime_bin,
+            "path": found,
+            "via": "path_lookup",
+        }
+
+    return False, {
+        "code": "runtime_bin_invalid_type",
+        "type": type(runtime_bin).__name__,
     }
 
 

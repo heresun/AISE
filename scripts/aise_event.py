@@ -554,12 +554,13 @@ def run_jest_pipe(
 
     window_start = _now_ms()
 
-    # 优先用 fixture 内 ./node_modules/.bin/jest，避免 npx 联网
-    local_jest = project_root / "node_modules" / ".bin" / "jest"
-    if local_jest.exists():
-        cmd = [str(local_jest)]
-    else:
+    # v3.3 P1-1：用 resolve_runtime_bin 统一查找（fixture 内 ./node_modules/.bin/jest）
+    ok_rt, rt_info = er.resolve_runtime_bin("jest-junit", project_root)
+    if not ok_rt:
+        # 找不到 → 退到 npx 兜底（不联网装包，仅查本地）
         cmd = ["npx", "--no-install", "jest"]
+    else:
+        cmd = [rt_info["path"]]
 
     cmd += list(extra_args or [])
     if targets:
@@ -880,14 +881,19 @@ def main() -> int:
             extra_args=args.jest_extra_arg,
         )
     elif args.pipe == "cargo-test-junit":
-        # info["found"] 是 cargo2junit（PIPE_DEFS bin），cargo 本身需要自己找
+        # v3.3 P1-1：preflight 校验的是 cargo2junit（info["found"]），
+        # runtime 实际跑 cargo —— 用 resolve_runtime_bin 显式分离
         cargo2junit_bin = info["found"]
-        cargo_bin = shutil.which("cargo") or str(Path.home() / ".cargo" / "bin" / "cargo")
+        ok_rt, rt_info = er.resolve_runtime_bin("cargo-test-junit", project_root)
+        if not ok_rt:
+            print(f"[AISE-event] FAIL: cargo runtime bin 缺失\n  info: {rt_info}",
+                  file=sys.stderr)
+            return er.EXIT_CODE_TOOL_MISSING
         exit_code, summary = run_cargo_pipe(
             project_root=project_root,
             out_dir=out_dir,
             run_id=run_id,
-            cargo_bin=cargo_bin,
+            cargo_bin=rt_info["path"],
             cargo2junit_bin=cargo2junit_bin,
             extra_args=args.cargo_extra_arg,
         )
