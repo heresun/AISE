@@ -141,6 +141,7 @@ aise/
 │   ├── plan-schema.md               plan.json schema v1.0
 │   ├── spike-2-compatibility.md     跨平台兼容性
 │   ├── spike-3-summary.md           5 pipe 全集落地报告
+│   ├── tool-compatibility-matrix.md 5 pipe 工具版本兼容性矩阵
 │   └── v3.3-completion-report.md    v3.3 完成度报告
 ├── LICENSE
 └── README.md
