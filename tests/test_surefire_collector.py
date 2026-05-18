@@ -214,3 +214,90 @@ def test_collect_handles_surefire_failsafe_same_name(tmp_path: Path) -> None:
     assert len(result["collected"]) == 2
     dst_names = sorted(Path(r["dst"]).name for r in result["collected"])
     assert dst_names == ["TEST-Foo.xml", "failsafe-TEST-Foo.xml"]
+
+
+# ----------------------------- NTFS 边界（v3.5 P2-3 mock 增强）-----------------------------
+
+
+@pytest.mark.parametrize(
+    "errno,errmsg,scenario",
+    [
+        (1, "Incorrect function", "ERROR_INVALID_FUNCTION (FAT32 不支持 hard link)"),
+        (17, "Cross-device link", "ERROR_NOT_SAME_DEVICE / EXDEV"),
+        (13, "Permission denied", "EACCES / ERROR_ACCESS_DENIED"),
+        (28, "No space left on device", "ENOSPC"),
+        (31, "Too many links", "ERROR_TOO_MANY_LINKS"),
+        (40, "Too many levels of symbolic links", "ELOOP"),
+    ],
+)
+def test_collect_falls_back_to_copy_for_various_oserror(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    errno: int,
+    errmsg: str,
+    scenario: str,
+) -> None:
+    """各种 OSError 类型都应触发 copy 回退（不止 EXDEV）。
+
+    Windows NTFS / WSL2 / Docker overlayfs 等环境会抛各种不同 errno 的
+    OSError，AISE 必须**全部捕获并回退 copy**，否则单个边界会让整个
+    AISE pipeline 中断。
+    """
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    out = tmp_path / "out"
+    _setup_target(proj, surefire={"TEST-CalcTest.xml": SUREFIRE_XML_PASS})
+
+    def fake_link(src, dst):
+        raise OSError(errno, errmsg)
+
+    monkeypatch.setattr(os, "link", fake_link)
+    result = sc.collect_surefire_xmls(proj, out)
+    assert len(result["collected"]) == 1, f"{scenario} 应回退 copy: {result}"
+    rec = result["collected"][0]
+    assert rec["method"] == "copy", f"{scenario} 应回退到 copy 而非 hard-link"
+    assert Path(rec["dst"]).exists()
+    # copy 是新 inode（与源不同）
+    assert Path(rec["src"]).stat().st_ino != Path(rec["dst"]).stat().st_ino
+
+
+def test_collect_falls_back_for_permission_error_subclass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PermissionError 是 OSError 子类，应被捕获回退."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    out = tmp_path / "out"
+    _setup_target(proj, surefire={"TEST-CalcTest.xml": SUREFIRE_XML_PASS})
+
+    def fake_link(src, dst):
+        raise PermissionError(13, "Access denied (Windows NTFS)")
+
+    monkeypatch.setattr(os, "link", fake_link)
+    result = sc.collect_surefire_xmls(proj, out)
+    assert len(result["collected"]) == 1
+    assert result["collected"][0]["method"] == "copy"
+
+
+def test_collect_warns_when_both_link_and_copy_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """link 失败 + copy 也失败 → 写入 warnings，不抛异常."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    out = tmp_path / "out"
+    _setup_target(proj, surefire={"TEST-CalcTest.xml": SUREFIRE_XML_PASS})
+
+    def fake_link(src, dst):
+        raise OSError(17, "Cross-device link")
+
+    def fake_copyfile(src, dst, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "link", fake_link)
+    monkeypatch.setattr(shutil, "copyfile", fake_copyfile)
+    result = sc.collect_surefire_xmls(proj, out)
+    # 完全失败时，collected 应为空，warnings 非空
+    assert len(result["collected"]) == 0
+    assert len(result["warnings"]) >= 1
+    assert "TEST-CalcTest.xml" in result["warnings"][0]
