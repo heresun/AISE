@@ -198,7 +198,12 @@ def check_project(project_root: Path) -> List[Check]:
 # ----------------------------- 输出 -----------------------------
 
 
-def render_markdown(checks: List[Check], summary: Dict[str, Any]) -> str:
+def render_markdown(
+    checks: List[Check],
+    summary: Dict[str, Any],
+    region_info_dict: Dict[str, Any] | None = None,
+    mirrors: Dict[str, Dict[str, Any]] | None = None,
+) -> str:
     lines = ["# AISE Doctor 报告\n"]
     # 按 category 分组
     by_cat: Dict[str, List[Check]] = {}
@@ -226,12 +231,41 @@ def render_markdown(checks: List[Check], summary: Dict[str, Any]) -> str:
                 lines.append(f"      {hint}")
                 lines.append(f"      ```")
 
+    # 镜像建议章节（仅 cn region 显示，避免噪声）
+    if region_info_dict and mirrors and region_info_dict.get("detected") == "cn":
+        lines.append("\n## 🌏 镜像建议（CN region 检测到）\n")
+        lines.append(f"- region 源：`{region_info_dict.get('source')}`")
+        if region_info_dict.get("timezone"):
+            lines.append(f"- 时区：`{region_info_dict.get('timezone')}`")
+        lines.append("")
+        lines.append("以下镜像可加速 brew/maven/pip/npm/cargo 下载（焦小糖 Spike-2 实测 aliyun maven 可用）：\n")
+        for tool, cfg in mirrors.items():
+            if not cfg.get("url"):
+                continue
+            lines.append(f"### {tool}")
+            lines.append(f"- URL: `{cfg['url']}`")
+            if cfg.get("file_path"):
+                lines.append(f"- 配置位置: `{cfg['file_path']}`")
+            if cfg.get("doc"):
+                lines.append(f"- 文档: {cfg['doc']}")
+            cmd = cfg.get("setup_command", "").strip()
+            if cmd:
+                lines.append(f"- 启用命令：")
+                lines.append("  ```")
+                for line in cmd.splitlines():
+                    lines.append(f"  {line}")
+                lines.append("  ```")
+            lines.append("")
+        lines.append("**注意**：AISE 不会自动改用户镜像配置（敏感操作），仅提示。\n")
+
     lines.append("\n## 总结\n")
     lines.append(f"- 全部检查：{summary['total']}")
     lines.append(f"- ✅ ok: {summary['ok']}")
     lines.append(f"- ⚠️  warn: {summary['warn']}")
     lines.append(f"- ❌ fail: {summary['fail']}")
     lines.append(f"- exit code: **{summary['exit_code']}**")
+    if region_info_dict:
+        lines.append(f"- region: {region_info_dict.get('detected')}（{region_info_dict.get('source')}）")
     if summary.get("strict"):
         lines.append("- 模式：strict（任何 fail 都视为 fatal）")
     return "\n".join(lines) + "\n"
@@ -250,9 +284,31 @@ def main() -> int:
                         help="任何 fail（含 optional）都视为 fatal exit 2")
     parser.add_argument("--project-root", default=None,
                         help="项目根目录，存在 .aise/plan.json 时做项目级 check")
+    parser.add_argument("--region", default=None, choices=["cn", "us", "global"],
+                        help="手动指定 region（覆盖 AISE_REGION env + timezone 自动探测）")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
+
+    # region 探测（--region 优先，否则走 region_detect）
+    region_info_dict: Dict[str, Any] = {}
+    mirrors_dict: Dict[str, Dict[str, Any]] = {}
+    try:
+        from lib import region_detect as rd
+        from lib import mirror_config as mc
+        if args.region:
+            region_info_dict = {
+                "detected": args.region,
+                "source": "cli_flag",
+                "env_AISE_REGION": os.environ.get("AISE_REGION") or None,
+                "timezone": rd._get_timezone_name() or None,
+            }
+        else:
+            region_info_dict = rd.region_info()
+        mirrors_dict = mc.get_mirrors(region_info_dict["detected"])
+    except Exception as e:  # noqa: BLE001
+        # 不让 region detect 失败阻塞 doctor 主体
+        region_info_dict = {"detected": "global", "source": "detect_error", "error": str(e)}
 
     checks: List[Check] = []
     checks.extend(check_python())
@@ -298,12 +354,21 @@ def main() -> int:
     }
 
     if args.json:
+        # 仅 cn region 输出有效的 mirror 推荐（global/us 为空 url，过滤）
+        mirrors_for_json = {
+            t: cfg for t, cfg in mirrors_dict.items() if cfg.get("url")
+        } if region_info_dict.get("detected") == "cn" else {}
         print(json.dumps(
-            {"checks": [asdict(c) for c in checks], "summary": summary},
+            {
+                "checks": [asdict(c) for c in checks],
+                "summary": summary,
+                "region": region_info_dict,
+                "mirrors": mirrors_for_json,
+            },
             ensure_ascii=False, indent=2,
         ))
     else:
-        print(render_markdown(checks, summary))
+        print(render_markdown(checks, summary, region_info_dict, mirrors_dict))
 
     return exit_code
 
