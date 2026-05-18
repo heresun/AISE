@@ -82,14 +82,15 @@ def test_doctor_python_version_check_present() -> None:
 # ----------------------------- pipe 工具自检 -----------------------------
 
 
-def test_doctor_lists_all_5_pipes() -> None:
+def test_doctor_lists_all_pipes() -> None:
+    """v3.5 起共 6 个 pipe（cargo-nextest-junit 加入）."""
     r = _run("--json")
     data = json.loads(r.stdout)
     pipe_checks = [c for c in data["checks"] if c["category"] == "pipe_tools"]
     pipe_names = {c["name"] for c in pipe_checks}
     expected_pipes = {
         "go-test-json-to-junit", "mvn-surefire", "pytest-junitxml",
-        "jest-junit", "cargo-test-junit",
+        "jest-junit", "cargo-test-junit", "cargo-nextest-junit",
     }
     assert pipe_names == expected_pipes, f"pipe 列表不全: {pipe_names}"
 

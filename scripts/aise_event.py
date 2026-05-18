@@ -775,6 +775,102 @@ def run_cargo_pipe(
     return (0 if test_ok else 1), summary
 
 
+def run_cargo_nextest_pipe(
+    project_root: Path,
+    out_dir: Path,
+    run_id: str,
+    cargo_bin: str,
+    extra_args: List[str],
+) -> tuple[int, dict]:
+    """跑 cargo nextest run --message-format junit。
+
+    与 cargo-test-junit 的区别：
+      - 不需要 RUSTC_BOOTSTRAP=1（nextest 在 stable Rust 原生支持 JUnit）
+      - 不需要管道（nextest 直接落盘 JUnit XML 到
+        target/nextest/<profile>/junit.xml，AISE 拷贝到 out_dir）
+      - 速度更快（并行 + 独立进程隔离）
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    junit_path = out_dir / f"junit-{run_id}.xml"
+    stdout_dump = out_dir / f"nextest-{run_id}.stdout.log"
+    stderr_dump = out_dir / f"nextest-{run_id}.stderr.log"
+
+    window_start = _now_ms()
+
+    # cargo nextest run --no-fail-fast --message-format libtest-json+junit-xml
+    # 实际：nextest 默认会写 target/nextest/<profile>/junit.xml；用 --message-format
+    # 可让 stdout 也输出结构化日志
+    cargo_cmd = [
+        cargo_bin, "nextest", "run", "--no-fail-fast",
+        "--message-format", "libtest-json",
+    ]
+    cargo_cmd += list(extra_args or [])
+
+    proc = subprocess.run(
+        cargo_cmd,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+    )
+    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
+
+    window_end = _now_ms()
+    test_ok = (proc.returncode == 0)
+
+    # nextest 写 JUnit 到 target/nextest/default/junit.xml，拷贝到 out_dir
+    nextest_junit = project_root / "target" / "nextest" / "default" / "junit.xml"
+    if nextest_junit.exists():
+        try:
+            junit_path.write_text(nextest_junit.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            pass
+
+    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
+    if junit_ok:
+        try:
+            ET.parse(junit_path)
+        except ET.ParseError:
+            junit_ok = False
+
+    artifacts = []
+    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
+        ev = ev_lib.collect_artifact(
+            path=path,
+            runner="cargo-nextest-junit",
+            window_start_ms=window_start,
+            window_end_ms=window_end,
+            source=source,
+            ok=test_ok,
+            project_root=project_root,
+        )
+        if ev:
+            artifacts.append(ev)
+    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
+
+    actual_targets = _parse_cargo_targets(junit_path)  # 复用 cargo2junit parser
+
+    summary = {
+        "pipe": "cargo-nextest-junit",
+        "run_id": run_id,
+        "project_root": str(project_root),
+        "junit_xml": str(junit_path),
+        "stdout_dump": str(stdout_dump),
+        "stderr_dump": str(stderr_dump),
+        "evidence_jsonl": str(ev_path),
+        "window_start_ms": window_start,
+        "window_end_ms": window_end,
+        "test_exit_code": proc.returncode,
+        "actual_test_targets": actual_targets,
+        "test_ok": test_ok,
+        "junit_ok": junit_ok,
+    }
+
+    if not junit_ok:
+        return 2, summary
+    return (0 if test_ok else 1), summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="AISE pipe runner")
     parser.add_argument("--pipe", required=True, help="Pipe 名称（见 PIPE_DEFS）")
@@ -799,6 +895,8 @@ def main() -> int:
                         help="cargo-test-junit 专用：透传额外 cargo test 参数")
     parser.add_argument("--cargo2junit-bin", default=None,
                         help="cargo-test-junit 专用：cargo2junit 可执行路径（默认 PATH 上）")
+    parser.add_argument("--nextest-extra-arg", action="append", default=[],
+                        help="cargo-nextest-junit 专用：透传额外 cargo nextest run 参数")
     args = parser.parse_args()
 
     # Step 1: preflight
@@ -898,8 +996,22 @@ def main() -> int:
             cargo2junit_bin=cargo2junit_bin,
             extra_args=args.cargo_extra_arg,
         )
+    elif args.pipe == "cargo-nextest-junit":
+        # v3.5：nextest 是 cargo 子命令，runtime 实际跑 cargo
+        ok_rt, rt_info = er.resolve_runtime_bin("cargo-nextest-junit", project_root)
+        if not ok_rt:
+            print(f"[AISE-event] FAIL: cargo runtime bin 缺失\n  info: {rt_info}",
+                  file=sys.stderr)
+            return er.EXIT_CODE_TOOL_MISSING
+        exit_code, summary = run_cargo_nextest_pipe(
+            project_root=project_root,
+            out_dir=out_dir,
+            run_id=run_id,
+            cargo_bin=rt_info["path"],
+            extra_args=args.nextest_extra_arg,
+        )
     else:
-        print(f"[AISE-event] Spike-3 已支持 go/mvn/pytest/jest/cargo；{args.pipe} 未识别",
+        print(f"[AISE-event] v3.5 已支持 go/mvn/pytest/jest/cargo/cargo-nextest；{args.pipe} 未识别",
               file=sys.stderr)
         return 2
 

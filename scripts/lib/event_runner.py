@@ -69,6 +69,17 @@ PIPE_DEFS: Dict[str, Dict[str, Any]] = {
             "Windows": "cargo install cargo2junit",
         },
     },
+    "cargo-nextest-junit": {
+        "bin": "cargo-nextest",   # preflight 校验 cargo-nextest 子命令存在
+        "runtime_bin": "cargo",   # runtime 跑 `cargo nextest run --message-format junit`
+        "purpose": "cargo-nextest 原生 JUnit 输出（无需 RUSTC_BOOTSTRAP=1）",
+        "install": {
+            "Darwin":  "cargo install cargo-nextest --locked",
+            "Linux":   "cargo install cargo-nextest --locked",
+            "Windows": "cargo install cargo-nextest --locked",
+        },
+        "docs": "https://nexte.st/",
+    },
     "mvn-surefire": {
         "bin": "mvn",
         "purpose": "Surefire/Failsafe 原生产出 JUnit XML",
