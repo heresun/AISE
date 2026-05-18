@@ -175,8 +175,8 @@ cd <project> && npm install --save-dev jest jest-junit
 
 #### Gotcha
 - **`cargo test --format json` 是 nightly-only**：stable Rust 不允许 `-Z
-  unstable-options`；AISE 用 `RUSTC_BOOTSTRAP=1` env 绕开（**安全风险**：
-  这会允许任意 nightly 功能，未来 stable 行为可能变）
+  unstable-options`；AISE 用 `RUSTC_BOOTSTRAP=1` env 绕开。完整风险评估
+  与替代方案见 [`rustc-bootstrap-risk.md`](rustc-bootstrap-risk.md)
 - **cargo stdout 混编译信息**：`Compiling` / `Finished` / `Running unittests`
   非 JSON 行会让 cargo2junit 解析失败；AISE 过滤纯 `{...}` 开头/结尾行
 - **cargo2junit 对空 stdin 返回空 `<testsuites/>`**：看似成功但 actual_targets=[]；
