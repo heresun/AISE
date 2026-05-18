@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import event_runner as er
 from lib import evidence as ev_lib
 from lib import surefire_collector as sc_lib
+from lib.ansi import maybe_strip
 
 
 # 默认允许的 target glob（Spike-1 简化：白名单写死）
@@ -161,8 +162,8 @@ def run_go_pipe(
         capture_output=True,
         text=True,
     )
-    stdout_dump.write_text(go_proc.stdout, encoding="utf-8")
-    stderr_dump.write_text(go_proc.stderr, encoding="utf-8")
+    stdout_dump.write_text(maybe_strip(go_proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(go_proc.stderr), encoding="utf-8")
 
     junit_proc = subprocess.run(
         junit_cmd,
@@ -295,8 +296,8 @@ def run_mvn_surefire_pipe(
         capture_output=True,
         text=True,
     )
-    stdout_dump.write_text(mvn_proc.stdout, encoding="utf-8")
-    stderr_dump.write_text(mvn_proc.stderr, encoding="utf-8")
+    stdout_dump.write_text(maybe_strip(mvn_proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(mvn_proc.stderr), encoding="utf-8")
 
     window_end = _now_ms()
     test_ok = (mvn_proc.returncode == 0)
@@ -438,8 +439,8 @@ def run_pytest_pipe(
         text=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
-    stdout_dump.write_text(proc.stdout, encoding="utf-8")
-    stderr_dump.write_text(proc.stderr, encoding="utf-8")
+    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
 
     window_end = _now_ms()
     test_ok = (proc.returncode == 0)
@@ -577,8 +578,8 @@ def run_jest_pipe(
         text=True,
         env=env,
     )
-    stdout_dump.write_text(proc.stdout, encoding="utf-8")
-    stderr_dump.write_text(proc.stderr, encoding="utf-8")
+    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
 
     window_end = _now_ms()
     test_ok = (proc.returncode == 0)
@@ -705,8 +706,8 @@ def run_cargo_pipe(
         text=True,
         env=env,
     )
-    stdout_dump.write_text(cargo_proc.stdout, encoding="utf-8")
-    stderr_dump.write_text(cargo_proc.stderr, encoding="utf-8")
+    stdout_dump.write_text(maybe_strip(cargo_proc.stdout), encoding="utf-8")
+    stderr_dump.write_text(maybe_strip(cargo_proc.stderr), encoding="utf-8")
 
     # cargo test stdout 夹杂非 JSON 行（Compiling / Finished / Running unittests ...）
     # cargo2junit 期望纯 JSON 流 → 过滤
