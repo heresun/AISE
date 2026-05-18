@@ -286,6 +286,8 @@ def main() -> int:
                         help="项目根目录，存在 .aise/plan.json 时做项目级 check")
     parser.add_argument("--region", default=None, choices=["cn", "us", "global"],
                         help="手动指定 region（覆盖 AISE_REGION env + timezone 自动探测）")
+    parser.add_argument("--check-versions", action="store_true",
+                        help="额外跑工具版本检查，与 tool-compatibility-matrix 对比")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
@@ -317,6 +319,16 @@ def main() -> int:
     checks.extend(check_stdio_encoding())
     checks.extend(check_pipe_tools())
     checks.extend(check_project(project_root))
+
+    # v3.5 P1-2: 可选版本检查
+    version_checks: List[Dict[str, Any]] = []
+    if args.check_versions:
+        try:
+            from lib.version_check import check_all_versions
+            version_checks = check_all_versions()
+        except Exception as e:  # noqa: BLE001
+            version_checks = [{"tool": "(version_check)", "status": "fail",
+                               "reason": f"import failed: {e}"}]
 
     n_ok = sum(1 for c in checks if c.status == "ok")
     n_warn = sum(1 for c in checks if c.status == "warn")
@@ -364,13 +376,36 @@ def main() -> int:
                 "summary": summary,
                 "region": region_info_dict,
                 "mirrors": mirrors_for_json,
+                "version_checks": version_checks,
             },
             ensure_ascii=False, indent=2,
         ))
     else:
-        print(render_markdown(checks, summary, region_info_dict, mirrors_dict))
+        md = render_markdown(checks, summary, region_info_dict, mirrors_dict)
+        if version_checks:
+            md += _render_version_section(version_checks)
+        print(md)
 
     return exit_code
+
+
+def _render_version_section(version_checks: List[Dict[str, Any]]) -> str:
+    """渲染版本检查 markdown 章节."""
+    icon_map = {"ok": "✅", "warn": "⚠️", "fail": "❌", "skip": "⏸️"}
+    lines = ["\n## 🔢 版本检查（与 tool-compatibility-matrix.md 对比）\n"]
+    for vc in version_checks:
+        icon = icon_map.get(vc["status"], "?")
+        if vc["status"] in ("ok", "warn"):
+            line = (f"- {icon} **{vc['tool']}** — actual `{vc['actual']}` / "
+                    f"min `{vc['min_version']}`")
+        elif vc["status"] == "skip":
+            line = f"- {icon} **{vc['tool']}** — 未装（min `{vc.get('min_version', '?')}`），见 pipe_tools 检查项"
+        else:
+            line = f"- {icon} **{vc['tool']}** — {vc.get('reason', '检查失败')}"
+        if vc.get("purpose"):
+            line += f"  *（{vc['purpose']}）*"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":
