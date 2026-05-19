@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v3.6.0] — 2026-05-19
+
+### 一句话
+
+> 工程质量收敛版：v3.5 cargo-nextest CI 跨平台全过、aise_doctor --export
+> 导出报告到文件、**v3.2.5 §17.1 240 测试目标 100% 达成**（241/241 全绿）。
+
+### Added
+
+#### `aise_doctor --export <path>`
+- 把 doctor 报告写到指定文件
+- 默认 markdown 格式；与 `--json` 组合写 JSON
+- stdout 同时输出（CLI 体验不变）
+- 父目录自动创建 / 覆盖已存在文件
+- 与 `--check-versions` 组合时版本章节也写入文件
+- 6 个单元测试
+
+#### GitHub Actions `v3_5-cargo-nextest` job
+- matrix: ubuntu-latest + macos-latest
+- 用 `taiki-e/install-action@v2` 装预编译 nextest 二进制（替代 `cargo install`，
+  快 10x+）
+- 跑 `tests/test_cargo_nextest.py` 含端到端 acceptance
+
+#### lib 模块直接单元测试（v3.6 补充覆盖）
+- `tests/test_snapshot.py` (11): create / check 4 状态 / **process-local cache
+  (v3.2.5 P1-D 核心防长跑篡改)** / require_snapshot helper
+- `tests/test_preflight.py` (11): detect_platform / preflight 全路径 / alt_bins
+  优先级 / preflight_or_exit / TOOL_DEPS schema 完整性
+- `tests/test_doctor_check_versions.py` +5: 边界场景（unknown / skip / python
+  特殊路径 / v 前缀 / check_all_versions 完整性）
+
+### Fixed
+
+#### Workflow #11 v3.5 cargo-nextest pipe fail（mac + ubuntu）
+根因（2 个）：
+1. `--message-format libtest-json` 在 stable Rust 仍是 unstable feature，
+   stable 工具链拒绝
+2. nextest 不会默认输出 JUnit XML — 必须在项目 `.config/nextest.toml`
+   配置 `[profile.<name>.junit]` 段
+
+修复:
+- 新增 `tests/fixtures/cargo-sample/.config/nextest.toml` 启用 default
+  profile 的 JUnit 输出
+- `aise_event.run_cargo_nextest_pipe` 去掉 `--message-format libtest-json`
+  参数，让 nextest 跑默认 reporter
+- JUnit 拷贝策略改进：扫描 `target/nextest/*/junit.xml` 取最新（兜底多
+  profile 场景）
+
+Workflow #12 验证：**18 jobs 全 success**，含 nextest mac + ubuntu。
+
+### Changed
+- README.md：6 pipe 表格新增 cargo-nextest-junit ⭐ 推荐标记 + 推荐理由
+- docs/aise-guide.md §5.2：手动跑各阶段新增 cargo-nextest + doctor
+  `--check-versions` / `--export` 示例
+
+### Tests
+- **v3.2.5 §17.1 240 测试目标达成**：241 全绿 + 1 skip / 17.39s（不含 mvn
+  端到端 6 个，共 247）
+- 覆盖率：
+  · 7 个 lib 模块全部有直接单元测试
+  · 11 个 scripts/aise_*.py 主流程通过 acceptance 间接覆盖
+  · 6 pipe runner 各有 fixture 端到端验收
+
+### CI
+- Workflow run 累计 12 次 / 4 个 fail-fix 循环
+- 最新 #12：**18 jobs / 全 success**
+  · Python unit 6 (3 OS × 2 Python)
+  · spike1-go 2 / spike2-maven 1 / spike3-pytest 3 / spike3-jest 2 /
+    spike3-cargo 2 / **v3_5-cargo-nextest 2**
+- Windows pytest pipe CI 实测全过（v3.3 P0-2/3 ctypes pid + UTF-8 stdio
+  方案有效）
+
+### Known Issues / Deferred
+- aise_track 与 evidence 链路对齐：继续 deferred（评估后判定低价值）
+- aise_gate_context.py：继续 deferred（run_context.json 已含 per-task 信息）
+- NTFS hard-link 跨盘**真实**测试（mock 已覆盖；Windows 真机未做）
+
+### Roadmap → v3.7
+- 默认推 cargo-nextest，cargo-test-junit 降级为 fallback（用户 opt-in）
+- v3.4/5/6 完成度报告整合（团队 review 用）
+- pytest pipe 在 jest/cargo 也加 Windows job
+- v3 完整流程图（架构图 docx/svg）
+
+### Commit Range (v3.5.0 → v3.6.0)
+```
+fb3eff3 docs: CHANGELOG v3.5.0 release notes  [v3.5.0 tag]
+812c976 ci: v3.6 — 加 cargo-nextest CI job
+ecaa0df fix+feat: v3.6 — nextest CI 修 + doctor --export
+67ab99f test: v3.6 — 达成 240 测试目标
+```
+
+---
+
 ## [v3.5.0] — 2026-05-18
 
 ### 一句话
