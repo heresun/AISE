@@ -27,7 +27,7 @@ ExitPlanMode → aise_run_init.py (plan 校验 + run_id)
    → aise_event.py (5 pipe) → aise_verify.py --verify-evidence
 ```
 
-### 🌐 5 种语言 pipe runner（Spike-1/2/3）
+### 🌐 6 种语言 pipe runner（Spike-1/2/3 + v3.5）
 
 | Pipe | 适用 | 工具 | 端到端验收 | CI 平台 |
 |---|---|---|:---:|---|
@@ -36,6 +36,10 @@ ExitPlanMode → aise_run_init.py (plan 校验 + run_id)
 | `pytest-junitxml` | Python | `pytest` | 5 ✅ | **macOS + Linux + Windows** |
 | `jest-junit` | JS/TS | fixture 内 jest | 4 ✅ | macOS + Linux |
 | `cargo-test-junit` | Rust | `cargo` + `cargo2junit` | 3 ✅ | macOS + Linux |
+| **`cargo-nextest-junit`** ⭐ | Rust | `cargo-nextest`（推荐）| 8 unit ✅ | macOS + Linux |
+
+⭐ v3.5 推荐 Rust 项目优先用 `cargo-nextest-junit`：原生 JUnit + stable Rust（无
+`RUSTC_BOOTSTRAP=1`）+ 更快。详见 [`docs/rustc-bootstrap-risk.md`](docs/rustc-bootstrap-risk.md)。
 
 ### 🛡️ plan.snapshot.json 防篡改（v1.1+ + v3.2.5 P1-D）
 gate 进程启动时一次性把 snapshot 读入内存，process-local 缓存。盘上

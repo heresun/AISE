@@ -195,8 +195,20 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_event.py" \
     --project-root "$(pwd)" \
     --run-id <run_id>
 
+# 跑 cargo-nextest pipe（v3.5 推荐，无 RUSTC_BOOTSTRAP）
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_event.py" \
+    --pipe cargo-nextest-junit \
+    --project-root "$(pwd)" \
+    --run-id <run_id>
+
 # 复核 evidence
 python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_verify.py" --verify-evidence
+
+# 一键自检（v3.4+）
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_doctor.py"
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_doctor.py" --check-versions    # v3.5
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_doctor.py" --export report.md  # v3.6
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_doctor.py" --json --export report.json
 ```
 
 ### 5.3 中途中断后续跑

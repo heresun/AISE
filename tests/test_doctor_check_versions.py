@@ -141,3 +141,49 @@ def test_version_minimums_match_compatibility_matrix() -> None:
     assert MINIMUMS["pytest"]["min"] == (6, 0, 0)
     assert MINIMUMS["node"]["min"] == (18, 0, 0)
     assert MINIMUMS["cargo"]["min"] == (1, 70, 0)
+
+
+# ----------------------------- 边界 -----------------------------
+
+
+def test_check_tool_version_unknown() -> None:
+    """未知工具应安全返回 fail，不抛."""
+    from lib.version_check import check_tool_version
+    r = check_tool_version("totally-unknown-tool-xyz")
+    assert r["status"] == "fail"
+    assert "unknown" in r.get("reason", "").lower()
+
+
+def test_check_tool_version_skip_when_bin_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """工具不在 PATH → status=skip（不是 fail，留给 pipe_tools 报错）."""
+    import shutil
+    from lib import version_check as vc
+    monkeypatch.setattr(shutil, "which",
+                        lambda b: None if b == "go" else "/x")
+    r = vc.check_tool_version("go")
+    assert r["status"] == "skip"
+    assert "PATH" in r.get("reason", "")
+
+
+def test_check_tool_version_python_uses_sys_info() -> None:
+    """python 工具走 sys.version_info（不 spawn）."""
+    import sys
+    from lib.version_check import check_tool_version
+    r = check_tool_version("python")
+    assert r["status"] in ("ok", "warn")
+    assert r["actual"] == f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def test_parse_version_with_prefix_v() -> None:
+    """v 前缀（node --version 输出格式）应被剥离."""
+    from lib.version_check import parse_version
+    assert parse_version("v18.0.0") == (18, 0, 0)
+    assert parse_version("Version v25.8.2") == (25, 8, 2)
+
+
+def test_check_all_versions_returns_all_minimums(monkeypatch: pytest.MonkeyPatch) -> None:
+    """check_all_versions 应覆盖 MINIMUMS 全部键."""
+    from lib.version_check import check_all_versions, MINIMUMS
+    results = check_all_versions()
+    tools = {r["tool"] for r in results}
+    assert tools == set(MINIMUMS.keys())
