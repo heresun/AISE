@@ -15,6 +15,25 @@
 
 ---
 
+## 🚨 关键说明：谁来跑这些脚本？
+
+**95% 场景**：用户**只需输入 `/aise <任务描述>`**，剩下全自动。
+
+| 脚本 | 谁跑 | 何时 |
+|---|---|---|
+| `/aise <任务>` slash command | **👤 用户** | 唯一日常入口 |
+| `scripts/aise_run_init.py` | 🤖 Claude Code 自动 | `/aise` 内 ExitPlanMode 后 |
+| `scripts/aise_scope_check.py` | 🤖 Claude Code 自动 | worker commit 前 |
+| `scripts/aise_event.py --pipe X` | 🤖 Claude Code 自动 | 跑测试时 |
+| `scripts/aise_verify.py` | 🤖 Claude Code 自动 | gate 阶段 |
+| `scripts/aise_doctor.py` | **👤 用户** | 装好后自检 / 排查 |
+| `.aise/plan.json` 编辑 | 👤 用户 + 🤖 AI 协作 | ExitPlanMode 前 |
+
+下面 **Step 0-2 / 7-8 是用户日常用的**，**Step 3-6 是二次开发 / debug / 学习
+内部机制时手动跑** — 日常用户可以跳过。
+
+---
+
 ## Step 0：环境检查（30 秒）
 
 ### 必装
@@ -109,7 +128,20 @@ AISE 主流程自动跑 9 个阶段：
 
 ---
 
+---
+
+# 🛠️ 二次开发 / 调试章节（Step 3 - 6）
+
+> ⚠️ **以下章节面向想理解 AISE 内部机制、做二次开发、合规审计的读者**。
+> 日常用户只用 `/aise <任务>` + `aise_doctor.py`，可以直接跳到 Step 7。
+
+---
+
 ## Step 3：写一个 plan.json（手动模式，5 分钟）
+
+> 🤖 **正常 `/aise` 流程会自动产生 plan.json**（通过 aise-planning-with-files
+> skill）。本节适用于：想跳过 brainstorming、精确控制 task 拆分、或单独测试
+> aise_run_init 的人。
 
 实际使用 AISE 主流程会自动产 `plan.json`。但你也可以手动写来精确控制：
 
@@ -171,6 +203,9 @@ python ~/.claude/plugins/marketplaces/aise/scripts/aise_run_init.py \
 
 ## Step 4：手动跑各 pipe runner（10 分钟）
 
+> 🤖 **正常 `/aise` 流程会按 plan.json 的 test_manifest.pipe 自动选 + 调用**。
+> 本节适用于：debug pipe 行为 / 学 evidence 链路 / 在 CI 单独跑某 pipe。
+
 ### 4.1 跑 Go pipe（如果有 Go 项目）
 
 ```bash
@@ -230,6 +265,9 @@ python aise_event.py \
 
 ## Step 5：scope gate（worker commit 前）
 
+> 🤖 **正常 `/aise` 流程在每个 task TDD 后自动调用**。本节适用于：在
+> hook / pre-commit 单独触发 / 验证 scope 配置是否正确。
+
 worker 改完代码后、commit 前**必须**跑：
 
 ```bash
@@ -255,6 +293,9 @@ scope 越界示例：
 ---
 
 ## Step 6：evidence 复核（machine signoff）
+
+> 🤖 **正常 `/aise` 流程在 gate 阶段自动调用 aise_verify.py**。本节用户
+> 也可主动跑：合规审计 / 跨 session 续跑确认证据未篡改 / debug。
 
 测试跑完后，任何时候都可复核 evidence：
 
@@ -283,6 +324,14 @@ exit 1
 violations:
   - evidence_tampered: actual_sha256 != expected
 ```
+
+---
+
+---
+
+# 👤 用户日常使用章节（Step 7 - 9）
+
+> 以下章节面向所有用户，是装好 AISE 后日常会用到的脚本。
 
 ---
 
@@ -477,9 +526,17 @@ exit 2。
 
 ## 🚀 一句话总结
 
-> 跑 `aise_doctor.py` → 写 `.aise/plan.json` → `aise_run_init.py` → worker
-> TDD → `aise_scope_check.py` → `aise_event.py --pipe X` → `aise_verify.py
-> --verify-evidence`。完整闭环，机器签收，跨平台 CI 实测。
+### 用户日常（95% 场景）
+> 1. 装好 → 跑 `aise_doctor.py` 自检环境
+> 2. 在 Claude Code 输入 `/aise <任务描述>`
+> 3. EnterPlanMode 时审查 + 调整计划，ExitPlanMode 批准
+> 4. 等 Claude Code 自动完成 9 阶段 → 看 git log + 测试报告
+> 5. 出问题 → 跑 `aise_doctor.py` 看哪个工具/版本/编码有问题
+
+### 内部机制（二次开发 / 合规审计）
+> `aise_run_init.py` → worker TDD → `aise_scope_check.py` → `aise_event.py
+> --pipe X` → `aise_verify.py --verify-evidence`。完整闭环，机器签收，
+> 跨平台 CI 实测。
 >
 > **关键 = 通过判定基于机器签收（sha256 + mtime + 生成窗口），不信 Agent 自报。**
 
