@@ -147,7 +147,8 @@ aise/
 │   ├── spike-3-summary.md           5 pipe 全集落地报告
 │   ├── tool-compatibility-matrix.md 5 pipe 工具版本兼容性矩阵
 │   ├── rustc-bootstrap-risk.md      RUSTC_BOOTSTRAP=1 风险评估
-│   └── v3.3-completion-report.md    v3.3 完成度报告
+│   ├── v3.3-completion-report.md    v3.3 完成度报告
+│   └── v3.4-6-completion-report.md  v3.4 → v3.6 完成度报告
 ├── LICENSE
 └── README.md
 ```

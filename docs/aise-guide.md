@@ -374,6 +374,7 @@ python -m pytest tests/test_spike2_acceptance.py -v
 - [`spike-2-compatibility.md`](spike-2-compatibility.md) — 跨平台兼容性
 - [`spike-3-summary.md`](spike-3-summary.md) — 5 pipe 全集落地报告
 - [`v3.3-completion-report.md`](v3.3-completion-report.md) — v3.3 完成度报告
+- [`v3.4-6-completion-report.md`](v3.4-6-completion-report.md) — v3.4 → v3.6 完成度报告
 - [`tool-compatibility-matrix.md`](tool-compatibility-matrix.md) — 工具版本兼容性矩阵
 - [`rustc-bootstrap-risk.md`](rustc-bootstrap-risk.md) — RUSTC_BOOTSTRAP=1 风险评估
 - v3.2.5 设计方案（外部）：`AISE-v2.3.2-Gate-Kernel-一步到位优化方案-v3.2.5.md`
