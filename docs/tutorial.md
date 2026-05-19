@@ -17,16 +17,24 @@
 
 ## 🚨 关键说明：谁来跑这些脚本？
 
-**95% 场景**：用户**只需输入 `/aise <任务描述>`**，剩下全自动。
+**用户只用 2 个 slash command**：
 
-| 脚本 | 谁跑 | 何时 |
+```
+/aise <任务描述>      日常任务入口
+/aise-doctor          环境自检 + 排查（AI 解析并给友好总结）
+```
+
+剩下全是 AI / 内部自动调，用户不需要记 Python 脚本路径：
+
+| 入口 / 脚本 | 谁触发 | 何时 |
 |---|---|---|
-| `/aise <任务>` slash command | **👤 用户** | 唯一日常入口 |
+| `/aise <任务>` slash command | **👤 用户** | 日常任务入口 |
+| `/aise-doctor` slash command | **👤 用户** | 装好后自检 + 排查 |
+| `scripts/aise_doctor.py` | 🤖 AI（通过 `/aise-doctor`） | 由 AI 解析输出，给用户友好总结 |
 | `scripts/aise_run_init.py` | 🤖 Claude Code 自动 | `/aise` 内 ExitPlanMode 后 |
 | `scripts/aise_scope_check.py` | 🤖 Claude Code 自动 | worker commit 前 |
 | `scripts/aise_event.py --pipe X` | 🤖 Claude Code 自动 | 跑测试时 |
 | `scripts/aise_verify.py` | 🤖 Claude Code 自动 | gate 阶段 |
-| `scripts/aise_doctor.py` | **👤 用户** | 装好后自检 / 排查 |
 | `.aise/plan.json` 编辑 | 👤 用户 + 🤖 AI 协作 | ExitPlanMode 前 |
 
 下面 **Step 0-2 / 7-8 是用户日常用的**，**Step 3-6 是二次开发 / debug / 学习
@@ -47,24 +55,26 @@
 - Node ≥ 18（jest pipe 用）
 - Rust stable + `cargo-nextest`（推荐 Rust pipe）
 
-### 用 aise_doctor 一键自检
+### 用 /aise-doctor 一键自检（推荐）
 
-```bash
-python ~/.claude/plugins/marketplaces/aise/scripts/aise_doctor.py
+在 Claude Code 直接输入：
+
+```
+/aise-doctor
 ```
 
-✅ 验证产出：终端看到 markdown 报告，含「Python 运行时」「git 工具」
-「Pipe Runner 工具链」等章节。所有装好的工具是 ✅，没装的是 ❌ + 平台
-特定安装命令。
+AI 会跑底层 `aise_doctor.py` 并给你**人话总结**（不是 dump 原始 markdown）。
+含：
+- ✅ 基础环境（Python / git / AISE 内部模块）
+- 📦 6 个 pipe runner 工具就绪状态
+- 🌏 region 探测（CN 自动展示国内镜像建议）
+- 📊 通过 / 警告 / 缺失计数 + 针对性建议
 
-国内用户加上 region 参数：
+✅ 验证产出：终端看到友好总结，含具体「建议」段落。
 
-```bash
-AISE_REGION=cn python aise_doctor.py
-```
-
-✅ 还能看到「🌏 镜像建议」章节，含 brew/maven/pip/npm/cargo 5 个国内镜像 +
-配置命令。
+完整 markdown 报告：`/aise-doctor --full`
+导出到文件：`/aise-doctor --export ~/doctor.md`
+CI 严格模式：`/aise-doctor --strict`
 
 ---
 
@@ -335,41 +345,53 @@ violations:
 
 ---
 
-## Step 7：用 aise_doctor 排查问题（v3.4+）
+## Step 7：用 /aise-doctor 排查问题（v3.4+）
 
-### 基础自检
+> 用户日常诊断主入口，4 种模式 4 行命令搞定。
 
-```bash
-aise_doctor.py
+### 友好总结（推荐，默认）
+
+```
+/aise-doctor
 ```
 
-### 含版本对比
+AI 解析后给「人话总结」+ 针对性建议，不是 dump 原始 markdown。
 
-```bash
-aise_doctor.py --check-versions
+### 完整 markdown 报告
+
+```
+/aise-doctor --full
 ```
 
-输出每个工具的 actual / min_version：
-```
-- ✅ go — actual `1.26.3` / min `1.21.0`
-- ⚠️ pytest — actual `5.0.0` / min `6.0.0`（版本过低）
-- ⏸️ cargo — 未装（min `1.70.0`）
-```
+含 6 大类 check 详细输出（Python / AISE 内部 / git / stdio / pipe / project）
++ 「🔢 版本检查」+ 「🌏 镜像建议」章节。
 
 ### 导出报告分享团队
 
-```bash
-aise_doctor.py --check-versions --export ~/doctor-report.md
+```
+/aise-doctor --export ~/doctor-report.md
 ```
 
-写到 `~/doctor-report.md`，便于贴到 GitHub Issue 或 Slack。
+写到指定文件，便于贴到 GitHub Issue 或 Slack。
 
 ### CI / 严格模式
 
-```bash
-aise_doctor.py --strict          # 任何 fail 都 fatal exit 2
-aise_doctor.py --json --strict   # 机器可读
 ```
+/aise-doctor --strict
+```
+
+任何 fail 或 warn 都 fatal exit 2。CI 启动前预检用。
+
+### 底层脚本（二次开发用）
+
+如需直接调脚本（绕过 AI 解析），手动跑：
+
+```bash
+PYTHONUTF8=1 python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_doctor.py" --check-versions --json
+```
+
+CLI 参数透传（`--region` / `--export` / `--strict` / `--project-root`），
+详见 `scripts/aise_doctor.py --help`。
 
 ---
 
@@ -527,11 +549,11 @@ exit 2。
 ## 🚀 一句话总结
 
 ### 用户日常（95% 场景）
-> 1. 装好 → 跑 `aise_doctor.py` 自检环境
+> 1. 装好 → 输入 `/aise-doctor` 自检环境
 > 2. 在 Claude Code 输入 `/aise <任务描述>`
 > 3. EnterPlanMode 时审查 + 调整计划，ExitPlanMode 批准
 > 4. 等 Claude Code 自动完成 9 阶段 → 看 git log + 测试报告
-> 5. 出问题 → 跑 `aise_doctor.py` 看哪个工具/版本/编码有问题
+> 5. 出问题 → 再跑 `/aise-doctor` 看 AI 总结哪里有问题
 
 ### 内部机制（二次开发 / 合规审计）
 > `aise_run_init.py` → worker TDD → `aise_scope_check.py` → `aise_event.py

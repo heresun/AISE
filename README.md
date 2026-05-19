@@ -71,13 +71,15 @@ declared `kind=package` + actual `kind=testcase` 且 `parent_package` 命中
 git clone https://github.com/heresun/AISE ~/.claude/plugins/marketplaces/aise
 ```
 
-### 使用
+### 使用（用户只需两个 slash command）
 
 ```
-/aise 给 data-bank 增加批量导出功能
+/aise-doctor                          # 一键自检环境（AI 解析后友好总结）
+/aise 给 data-bank 增加批量导出功能    # 启动 9 阶段端到端编排
 ```
 
-整个流程 9 阶段串行/并行执行，全程跨平台。详见
+整个流程 9 阶段串行/并行执行，全程跨平台。所有内部 aise_*.py 由 Claude Code
+自动调，用户不需要记 Python 路径。详见 [docs/tutorial.md](docs/tutorial.md) +
 [docs/aise-guide.md](docs/aise-guide.md)。
 
 ### 手动跑各阶段
