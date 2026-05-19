@@ -90,7 +90,15 @@ python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_run_init.py" \
 }
 ```
 
-`test_manifest.pipe` 必须是 v3.3 支持的 5 种之一：`go-test-json-to-junit` / `mvn-surefire` / `pytest-junitxml` / `jest-junit` / `cargo-test-junit`。
+`test_manifest.pipe` 必须是 v3.5 支持的 **6 种** 之一：
+`go-test-json-to-junit` / `mvn-surefire` / `pytest-junitxml` / `jest-junit` /
+`cargo-test-junit` / **`cargo-nextest-junit`**（v3.5 新增，推荐 Rust 项目优先用）。
+
+**Rust 项目两种选择**：
+- `cargo-test-junit`：零外部依赖（cargo2junit 通过 RUSTC_BOOTSTRAP=1 启用），但触
+  碰 stable Rust 逃生口，[详见 docs/rustc-bootstrap-risk.md](../docs/rustc-bootstrap-risk.md)
+- `cargo-nextest-junit`：原生 stable Rust + 更快 + 不触碰 unstable，但需用户先跑
+  `cargo install cargo-nextest --locked`
 
 ### 步骤 4：任务执行阶段（小模型 + TDD）（优化③⑥⑨）
 

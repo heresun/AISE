@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [v3.5.0] — 2026-05-18
+
+### 一句话
+
+> v3.4 + v3.5 双版本工程化深耕：第 **6 个 pipe** `cargo-nextest-junit` 引入
+> 消除 `RUSTC_BOOTSTRAP=1` 长期依赖、AGENTS.md onboarding 体系、
+> `aise_doctor` 增强（region detect + 镜像建议 + 版本对比）、ANSI 颜色过滤、
+> NTFS hard-link 边界全场景覆盖。
+
+### Added
+
+#### 第 6 个 pipe runner: `cargo-nextest-junit`（v3.5）
+- `cargo nextest run --message-format libtest-json` 原生 JUnit 输出
+- **无需 `RUSTC_BOOTSTRAP=1`**（stable Rust 即可）
+- 更快：nextest 并行 + 独立进程隔离
+- runtime_bin = cargo（nextest 是 cargo 子命令）
+- preflight 校验 cargo-nextest 子命令
+- 复用 `_parse_cargo_targets`（XML 格式与 cargo2junit 兼容）
+- 文档：`docs/rustc-bootstrap-risk.md` §6 路线图落地
+
+#### AGENTS.md onboarding（v3.5）
+让未来 AI 会话只读这一个文件就能 onboard：
+- 三阶段闭环图 + 5/6 pipe 总表 + 4 层组件
+- 13+ 个已踩过的坑（含工程经验沉淀）
+- 跨平台关键差异表
+- 常用命令 + 测试体系 + 完整版本时间线
+- 接手要点 7 条
+
+#### aise_doctor 增强（v3.4 + v3.5）
+- `--region <cn/us/global>`：自动检测（env / timezone）+ 显示镜像建议
+- 「🌏 镜像建议」章节：brew / maven / pip / npm / cargo 5 类工具 + setup_command
+- `--check-versions`：实际跑 `--version` 拿版本号，与 `tool-compatibility-matrix.md`
+  最低版本对比
+- `version_check.py`：MINIMUMS 字典 + parse_version 宽松正则 + meets_minimum 元组比较
+
+#### 文档体系（v3.4 + v3.5）
+- `docs/tool-compatibility-matrix.md`：5 pipe × {runtime / runner 工具 /
+  Spike 实测 / CI 实测} 完整版本支持矩阵
+- `docs/rustc-bootstrap-risk.md`：RUSTC_BOOTSTRAP=1 风险评估 + v3.5 cargo-nextest
+  路线图
+- `AGENTS.md`：项目级 AI onboarding
+
+#### lib 新增模块
+- `lib/region_detect.py`：region 探测（env + timezone，不做 DNS）
+- `lib/mirror_config.py`：CN region 5 类工具镜像配置
+- `lib/ansi.py`：CSI/OSC/单字符 escape 三类 sequence 过滤
+- `lib/version_check.py`：MINIMUMS + parse_version + check_all_versions
+
+#### 测试套件扩充
+- `test_region_mirror.py` (17): region detect + mirror_config + doctor 集成
+- `test_ansi.py` (19): CSI/OSC/SGR/256 色/truecolor/真实 mvn/cargo 样本/bytes
+- `test_doctor_check_versions.py` (11): parse_version + meets_minimum + doctor 集成
+- `test_cargo_nextest.py` (8): PIPE_DEFS 注册 + preflight + parse + skipif acceptance
+- `test_surefire_collector.py` +8: 6 种 OSError errno parametrize + link+copy 双失败
+
+### Changed
+- `lib/ansi.maybe_strip` 集成到 `aise_event.py` 5 个 runner 的 stdout/stderr dump
+  写盘前过滤（mvn / cargo / npm 等 TTY 颜色码不再污染 dump.log）
+- `aise_doctor.py` markdown 输出新增「🔢 版本检查」章节
+- `PIPE_DEFS["cargo-nextest-junit"]` 加入，pipe 总数从 5 → **6**
+
+### Fixed
+- (无 v3.4/v3.5 期间引入的 bug；纯增量功能)
+
+### Engineering Insights（新增）
+1. **PIPE_DEFS.bin ≠ runtime_bin** 的设计教训进一步泛化到 cargo-nextest（preflight
+   验子命令存在，runtime 跑 `cargo nextest run`）
+2. **Windows pid 探测**：实测 GitHub Actions Windows runner py3.10/3.12 全过
+   （v3.3 P0-3 实战验证 ctypes kernel32.OpenProcess + STILL_ACTIVE=259 方案有效）
+3. **国内 GitHub SSH 22 端口偶发阻断**：本会话期间 GitHub SSH 22/443/HTTPS 同时
+   被 reset 约 1 小时；本地累积 6 commit 待 push，最终用户切网络成功
+4. **`cargo nextest --message-format libtest-json`** 是 nextest 0.9.50+ 引入的
+   稳定 JUnit 输出方式，比早期 `--message-format junit` 更可靠
+
+### Known Issues / Deferred
+- cargo-nextest acceptance 端到端测试在本地 mac 跑通需 `cargo install cargo-nextest`
+  （未做，pytest.skipif 兜底）；GitHub Actions 也未加 nextest job（v3.6 待做）
+- aise_track 与 evidence 链路对齐：评估后判定 track 是过程信号，evidence 是产物
+  签收，本质不同；改造价值低，继续 deferred
+
+### Roadmap → v3.6
+- 给 GitHub Actions 加 cargo-nextest job（mac + linux）
+- 默认推 cargo-nextest，cargo-test-junit 降级为 fallback（用户 opt-in）
+- `aise_doctor --doctor-export` 导出 markdown 报告到文件
+- 240 测试目标（当前 208，剩余 32）
+
+### Commit Range (v3.4 → v3.5)
+```
+v3.4.x (pushed):
+  249c355 feat: v3.4 aise_doctor.py
+  26d4f7d docs: v3.4 tool-compatibility-matrix
+
+v3.4 P2 (本批):
+  4d6756d feat: v3.4 P1-3 region detect + 镜像推荐
+  8ddd0c4 feat: v3.4 P2-1 ANSI 颜色码过滤
+  696a7f7 docs: v3.4 P2-2 RUSTC_BOOTSTRAP=1 风险评估
+
+v3.5 (本批):
+  1a0fbb0 feat: v3.5 AGENTS.md onboarding + NTFS hard-link 边界增强
+  1c9bc24 feat: v3.5 P1-2 aise_doctor --check-versions
+  6cf73eb feat: v3.5 cargo-nextest-junit 第 6 个 pipe
+```
+
+---
+
 ## [v3.3.0] — 2026-05-17
 
 ### 一句话
