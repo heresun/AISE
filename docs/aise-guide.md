@@ -374,6 +374,8 @@ python -m pytest tests/test_spike2_acceptance.py -v
 - [`spike-2-compatibility.md`](spike-2-compatibility.md) — 跨平台兼容性
 - [`spike-3-summary.md`](spike-3-summary.md) — 5 pipe 全集落地报告
 - [`v3.3-completion-report.md`](v3.3-completion-report.md) — v3.3 完成度报告
+- [`architecture.md`](architecture.md) — Mermaid 架构图（5 层 + 三阶段 + 数据流）
+- [`tutorial.md`](tutorial.md) — 使用教程（step-by-step）
 - [`v3.4-6-completion-report.md`](v3.4-6-completion-report.md) — v3.4 → v3.6 完成度报告
 - [`tool-compatibility-matrix.md`](tool-compatibility-matrix.md) — 工具版本兼容性矩阵
 - [`rustc-bootstrap-risk.md`](rustc-bootstrap-risk.md) — RUSTC_BOOTSTRAP=1 风险评估

@@ -141,7 +141,9 @@ aise/
 ├── templates/aise/         .aise/ 工作区模板（含 plan.json）
 ├── hooks/hooks.json        PostToolUse + SessionStart 自动注册
 ├── docs/
-│   ├── aise-guide.md                v3.3 实施指南
+│   ├── architecture.md              Mermaid 架构图（GitHub 渲染）
+│   ├── tutorial.md                  使用教程（step-by-step）
+│   ├── aise-guide.md                v3.3+ 实施指南
 │   ├── plan-schema.md               plan.json schema v1.0
 │   ├── spike-2-compatibility.md     跨平台兼容性
 │   ├── spike-3-summary.md           5 pipe 全集落地报告
