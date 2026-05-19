@@ -288,6 +288,8 @@ def main() -> int:
                         help="手动指定 region（覆盖 AISE_REGION env + timezone 自动探测）")
     parser.add_argument("--check-versions", action="store_true",
                         help="额外跑工具版本检查，与 tool-compatibility-matrix 对比")
+    parser.add_argument("--export", default=None, metavar="PATH",
+                        help="把报告写到指定文件（markdown，或与 --json 组合写 JSON）")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
@@ -370,7 +372,7 @@ def main() -> int:
         mirrors_for_json = {
             t: cfg for t, cfg in mirrors_dict.items() if cfg.get("url")
         } if region_info_dict.get("detected") == "cn" else {}
-        print(json.dumps(
+        output = json.dumps(
             {
                 "checks": [asdict(c) for c in checks],
                 "summary": summary,
@@ -379,12 +381,24 @@ def main() -> int:
                 "version_checks": version_checks,
             },
             ensure_ascii=False, indent=2,
-        ))
+        )
     else:
-        md = render_markdown(checks, summary, region_info_dict, mirrors_dict)
+        output = render_markdown(checks, summary, region_info_dict, mirrors_dict)
         if version_checks:
-            md += _render_version_section(version_checks)
-        print(md)
+            output += _render_version_section(version_checks)
+
+    # stdout 始终输出（CLI 体验不变）
+    print(output)
+
+    # --export：同时写到文件
+    if args.export:
+        export_path = Path(args.export)
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            export_path.write_text(output, encoding="utf-8")
+        except OSError as e:
+            print(f"[AISE-doctor] WARN: 导出失败 {export_path}: {e}",
+                  file=sys.stderr)
 
     return exit_code
 

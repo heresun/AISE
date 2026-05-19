@@ -1,0 +1,8 @@
+# cargo-nextest 配置：启用 default profile 的 JUnit XML 输出。
+# 路径：target/nextest/default/junit.xml
+#
+# v3.5 第 6 个 pipe `cargo-nextest-junit` 依赖这个配置才能产出 JUnit。
+# 参考：https://nexte.st/docs/configuration/reporters/
+
+[profile.default.junit]
+path = "junit.xml"

@@ -797,13 +797,11 @@ def run_cargo_nextest_pipe(
 
     window_start = _now_ms()
 
-    # cargo nextest run --no-fail-fast --message-format libtest-json+junit-xml
-    # 实际：nextest 默认会写 target/nextest/<profile>/junit.xml；用 --message-format
-    # 可让 stdout 也输出结构化日志
-    cargo_cmd = [
-        cargo_bin, "nextest", "run", "--no-fail-fast",
-        "--message-format", "libtest-json",
-    ]
+    # cargo nextest run --no-fail-fast
+    # nextest 通过 .config/nextest.toml 的 [profile.default.junit] 配置控制 JUnit 输出
+    # 路径：target/nextest/default/junit.xml
+    # 不使用 --message-format（libtest-json 在 stable Rust 上仍是 unstable）
+    cargo_cmd = [cargo_bin, "nextest", "run", "--no-fail-fast"]
     cargo_cmd += list(extra_args or [])
 
     proc = subprocess.run(
@@ -818,11 +816,22 @@ def run_cargo_nextest_pipe(
     window_end = _now_ms()
     test_ok = (proc.returncode == 0)
 
-    # nextest 写 JUnit 到 target/nextest/default/junit.xml，拷贝到 out_dir
-    nextest_junit = project_root / "target" / "nextest" / "default" / "junit.xml"
-    if nextest_junit.exists():
+    # nextest 写 JUnit 到 target/nextest/<profile>/junit.xml；profile 由
+    # .config/nextest.toml 决定（默认 default）。若 fixture 缺配置则 junit.xml
+    # 不存在，junit_ok = False，summary 中可见 stderr 帮助用户排错。
+    # 多 profile 兜底：扫描 target/nextest/*/junit.xml 取最新
+    nextest_root = project_root / "target" / "nextest"
+    candidates = []
+    if nextest_root.exists():
+        for profile_dir in nextest_root.iterdir():
+            jx = profile_dir / "junit.xml"
+            if jx.exists():
+                candidates.append((jx.stat().st_mtime, jx))
+    if candidates:
+        candidates.sort(reverse=True)
+        src = candidates[0][1]
         try:
-            junit_path.write_text(nextest_junit.read_text(encoding="utf-8"), encoding="utf-8")
+            junit_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         except OSError:
             pass
 
