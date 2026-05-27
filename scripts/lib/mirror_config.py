@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 
-# CN region 推荐镜像（焦小糖在 Spike-2 真实验证过 aliyun maven 镜像可用）
+# CN region 推荐镜像（在 Spike-2 真实验证过 aliyun maven 镜像可用）
 _CN_MIRRORS: Dict[str, Dict[str, Any]] = {
     "brew": {
         "url": "https://mirrors.ustc.edu.cn/brew.git",

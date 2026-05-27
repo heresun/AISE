@@ -149,5 +149,5 @@ Spike-3 (12):
 
 ---
 
-_本报告由 焦小糖团队（Anthropic Claude Code, Opus 4.7）生成。Spike-3 完成度
+_本报告由 AISE 团队生成。Spike-3 完成度
 报告 v1.0。_

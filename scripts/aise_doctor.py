@@ -238,7 +238,7 @@ def render_markdown(
         if region_info_dict.get("timezone"):
             lines.append(f"- 时区：`{region_info_dict.get('timezone')}`")
         lines.append("")
-        lines.append("以下镜像可加速 brew/maven/pip/npm/cargo 下载（焦小糖 Spike-2 实测 aliyun maven 可用）：\n")
+        lines.append("以下镜像可加速 brew/maven/pip/npm/cargo 下载（Spike-2 实测 aliyun maven 可用）：\n")
         for tool, cfg in mirrors.items():
             if not cfg.get("url"):
                 continue

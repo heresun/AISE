@@ -3,15 +3,15 @@
 > **下一个 AI 会话只读这一个文件就能 onboard**。
 > 包含架构 + 关键决策 + 踩坑经验 + 常用命令。其他细节按需查 `docs/`。
 
-最后更新：2026-05-18（v3.4 完成度 5/6，本地 3 commit 未 push）
+最后更新：2026-05-27（v3.6.0，247 测试，全量已 push）
 
 ---
 
 ## 1. 一句话项目定位
 
 AISE = Claude Code 插件，**端到端任务流程编排** + **machine signoff**
-（机器签收，不信 Agent 自报）+ **5 种语言 pipe runner** + **三阶段闭环 gate**。
-v3.3.0 已 release，v3.4 主路径完成 5/6 项。
+（机器签收，不信 Agent 自报）+ **6 种语言 pipe runner** + **三阶段闭环 gate**。
+v3.6.0 已 release，247 测试全绿。
 
 ---
 
@@ -23,7 +23,7 @@ ExitPlanMode
   → aise_run_init.py    (plan 校验 + run_id + snapshot 锁)
   → worker TDD          (Claude Code 自身)
   → aise_scope_check.py (git diff vs task.scope.paths)
-  → aise_event.py       (5 pipe 之一，evidence.jsonl 签收)
+  → aise_event.py       (6 pipe 之一，evidence.jsonl 签收)
   → aise_verify.py      (--verify-evidence 复核 sha256 + mtime)
 ```
 
@@ -31,9 +31,9 @@ ExitPlanMode
 1. **编排层**：`/aise` slash command + 6 个 `aise-` 前缀 skill
 2. **入口层**：`aise_run_init.py`（plan 校验 + run_id）
 3. **Gate 层**：`aise_scope_check.py` + `aise_verify.py`
-4. **执行层**：`aise_event.py` + 5 pipe runner
+4. **执行层**：`aise_event.py` + 6 pipe runner
 
-### 5 种 pipe（全部端到端验证过）
+### 6 种 pipe（全部端到端验证过）
 | pipe | 工具链 | preflight bin | runtime bin |
 |---|---|---|---|
 | go-test-json-to-junit | Go + go-junit-report v2 | go-junit-report | go-junit-report |
@@ -41,6 +41,7 @@ ExitPlanMode
 | pytest-junitxml | Python 3.10+ + pytest 6+ | pytest（or python -m pytest）| 同 |
 | jest-junit | node 18+ + jest 29+ + jest-junit 16 | **node** | `./node_modules/.bin/jest` |
 | cargo-test-junit | stable Rust + cargo2junit | **cargo2junit** | **cargo**（RUSTC_BOOTSTRAP=1）|
+| cargo-nextest-junit | stable Rust + cargo-nextest | **cargo-nextest** | **cargo**（无需 BOOTSTRAP）|
 
 ⚠️ **jest 和 cargo 的 preflight bin ≠ runtime bin**——`PIPE_DEFS.runtime_bin`
 字段（v3.3 P1-1 引入）显式分离，用 `lib.event_runner.resolve_runtime_bin()`
@@ -58,10 +59,10 @@ ExitPlanMode
 ### 核心 scripts/
 ```
 aise_run_init.py        三阶段第 1 步：plan 校验 + run_id
-aise_event.py           三阶段第 3 步：5 pipe runner 调度
+aise_event.py           三阶段第 3 步：6 pipe runner 调度
 aise_scope_check.py     三阶段第 2 步：git diff vs scope
 aise_verify.py          v1.1 evidence 复核（machine signoff）
-aise_doctor.py          v3.4 一键自检环境（用户最常跑）
+aise_doctor.py          v3.4 一键自检环境（支持 --export / --strict / --check-versions）
 aise_snapshot.py        v1.1 旧入口（仅 snapshot create/check）
 aise_init.py            最早入口（初始化 .aise/ 目录）
 aise_track.py / aise_fuse.py / aise_inject_context.py / aise_sediment.py / aise_dashboard.py
@@ -80,6 +81,7 @@ lib/surefire_collector.py  Maven hard-link 优先 + EXDEV 回退 copy
 lib/region_detect.py    v3.4 region 探测（env + timezone）
 lib/mirror_config.py    v3.4 镜像源建议（brew/maven/pip/npm/cargo）
 lib/ansi.py             v3.4 ANSI 颜色过滤
+lib/version_check.py     v3.5 工具版本对比引擎（MINIMUMS + meets_minimum）
 ```
 
 ### 必读文档（按时间顺序）
@@ -121,7 +123,7 @@ lib/ansi.py             v3.4 ANSI 颜色过滤
     prefix 包含判定
 13. **zsh `status` 是只读变量** → 不能用 `status=$(...)`，用别的名字
 14. **git remote 是 SSH，HTTPS 没存 credential** → push 失败时改 `! git push`
-    让用户在终端手动跑（焦小糖不擅自改 remote URL）
+     让用户在终端手动跑
 15. **GitHub SSH 22 端口国内偶发被阻断** → 22/443/HTTPS 都可能 fail，等
     自愈或换 VPN
 
@@ -140,7 +142,7 @@ lib/ansi.py             v3.4 ANSI 颜色过滤
 
 ---
 
-## 6. 常用命令（焦小糖经常跑）
+## 6. 常用命令
 
 ### 跑测试
 ```bash
@@ -175,7 +177,7 @@ print(f'run #{r[\"run_number\"]} {r[\"status\"]} ({r[\"head_sha\"][:10]})')"
 
 ---
 
-## 6. 设计原则（KISS 至上）
+## 7. 设计原则（KISS 至上）
 
 1. **零外部依赖**：仅 Python 标准库；dev 仅 pytest
 2. **永不抛异常给调用方**：`aise_doctor` / `aise_track` 等用户工具
@@ -190,7 +192,7 @@ print(f'run #{r[\"run_number\"]} {r[\"status\"]} ({r[\"head_sha\"][:10]})')"
 
 ---
 
-## 7. 测试体系（v3.4 完成时）
+## 8. 测试体系（v3.6 完成时）
 
 ```
 tests/test_lock.py                      10  lock 原子性 + stale
@@ -204,25 +206,30 @@ tests/test_defense_path_separator.py     7  Windows 路径
 tests/test_aise_run_init.py             18  plan 校验
 tests/test_aise_scope_check.py          10  git diff vs scope
 tests/test_aise_doctor.py               11  doctor 输出
+tests/test_doctor_export.py              6  --export 导出
+tests/test_doctor_check_versions.py     11  版本比较
 tests/test_region_mirror.py             17  region detect + mirrors
 tests/test_ansi.py                      19  ANSI 过滤
+tests/test_snapshot.py                  11  create/check/cache
+tests/test_preflight.py                 11  preflight + TOOL_DEPS
+tests/test_cargo_nextest.py              8  cargo-nextest PIPE_DEFS + acceptance
 tests/test_spike1_acceptance.py          6  Go pipe E2E
-tests/test_spike2_acceptance.py          6  mvn pipe E2E（慢，7m37s）
+tests/test_spike2_acceptance.py          6  mvn pipe E2E（慢，~8min）
 tests/test_spike3_pytest_acceptance.py   5  pytest pipe E2E
 tests/test_spike3_jest_acceptance.py     4  jest pipe E2E
 tests/test_spike3_cargo_acceptance.py    3  cargo pipe E2E
 
-合计：188 测试（含 mvn）/ 182 全绿 15s 内（不含 mvn）
+合计：247 测试（含 mvn）/ 241 全绿 20s 内（不含 mvn）
 ```
 
 ### CI 矩阵（GitHub Actions）
 - 3 平台 × 2 Python = 6 Python unit jobs（必跑）
-- 5 个 pipe runner 各自 job（mac + linux，部分含 windows）
-- 总计 16 jobs / 1 个 workflow
+- 6 个 pipe runner 各自 job（mac + linux，部分含 windows）
+- 总计 18 jobs / 1 个 workflow
 
 ---
 
-## 8. 版本演进时间线
+## 9. 版本演进时间线
 
 ```
 v1.0.0  e195c08  baseline 9 阶段编排
@@ -237,49 +244,40 @@ v3.3 fix  f08059c  Windows UTF-8
 v3.3 docs 22f0d2c  完成度报告 + 用户指南
 v3.3.0  537bef4  CHANGELOG + git tag
 
-v3.4 doctor      249c355  aise_doctor.py（pushed）
-v3.4 compat      26d4f7d  兼容性矩阵（pushed）
-v3.4 mirror     4d6756d  region + mirror（本地未 push）
-v3.4 ansi       8ddd0c4  ANSI 过滤（本地未 push）
-v3.4 rustc-risk 696a7f7  RUSTC_BOOTSTRAP 风险评估（本地未 push）
+v3.4 doctor      249c355  aise_doctor.py
+v3.4 compat      26d4f7d  兼容性矩阵
+v3.4 mirror     4d6756d  region + mirror
+v3.4 ansi       8ddd0c4  ANSI 过滤
+v3.4 rustc-risk 696a7f7  RUSTC_BOOTSTRAP 风险评估
 
-v3.5 路线图（未做）:
-- cargo-nextest-junit 第 6 个 pipe（消除 RUSTC_BOOTSTRAP=1）
-- aise_doctor --check-versions（对比版本矩阵）
-- 240 测试目标
-- aise_gate_context.py（仅当 per-task 调优参数变多时）
+v3.5 路线图（全部完成）:
+- cargo-nextest-junit 第 6 个 pipe（消除 RUSTC_BOOTSTRAP=1）✅
+- aise_doctor --check-versions（对比版本矩阵）✅
+- 240 测试目标 ✅
+- aise_gate_context.py（deferred，run_context.json 已含 per-task 信息）
+
+v3.6.0  67ab99f  240 测试目标达成 + CI cargo-nextest + --export 导出
+v3.6.0  355cb73  CHANGELOG v3.6.0 release notes
 ```
 
 ---
 
-## 9. 接手要点
+## 10. 接手要点
 
 如果你是接手的 AI 会话：
 
 1. **先读 docs/v3.3-completion-report.md** 知道 v3.2.5 落地了 61%
 2. **先跑 `python3 scripts/aise_doctor.py`** 确认你的环境就绪
 3. **先跑 `python3 -m pytest tests/ -q --ignore=tests/test_spike2_acceptance.py --ignore=tests/fixtures`**
-   确认本地 182 测试全绿
+   确认本地 241 测试全绿
 4. **改任何代码前先看相关 lib/*.py 模块**——它们是核心，scripts/ 大多
    只是 CLI 入口
 5. **新加 pipe** 时：参考 cargo-nextest 实现（v3.5 路线图）—— PIPE_DEFS
    + runner 函数 + parse_targets + fixture + acceptance test 五件套
-6. **不要擅自改 git config / remote URL**（焦小糖踩过的坑：HTTPS 没
+6. **不要擅自改 git config / remote URL**（HTTPS 没
    credential 而 SSH 阻断时不要换 URL 救场）
 7. **不要在没明确许可时 commit / push**
 
 ---
 
-## 10. 焦小糖团队留言
-
-焦小糖（Anthropic Claude Code, Opus 4.7）在 2026-05-16 → 2026-05-18 单次
-长会话内完成从 v1.0 → v3.4 的全部落地（~21d 等价工作量）。Spike-1/2/3
-推荐路径有效——文档评审 9 轮平台收敛后，3 个 Spike 共 ~13d 暴露了 13+
-个文档不可见的工程问题（见上文 §4）。
-
-最大教训：**代码会暴露文档无法预见的问题**。Spike 验证不是浪费，是
-真理生成器。
-
 ---
-
-_本 onboarding 由焦小糖团队维护。下一次大改后请更新本文件第 8 节时间线。_

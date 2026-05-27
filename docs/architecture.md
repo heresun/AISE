@@ -305,4 +305,4 @@ graph TB
 
 ---
 
-_本架构图由 焦小糖团队（Anthropic Claude Code, Opus 4.7）维护。v3.6.0 截图。_
+_本架构图由 AISE 团队维护。v3.6.0 截图。_

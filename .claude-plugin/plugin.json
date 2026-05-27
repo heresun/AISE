@@ -1,13 +1,13 @@
 {
   "name": "aise",
-  "version": "1.0.0",
-  "description": "AISE 过程增强审查机制 v2 — 编排大小模型分工、TDD 前置、多 persona 审查、智能熔断、知识沉淀闭环，全套跨平台 Python 实现",
+  "version": "3.6.0",
+  "description": "AISE 过程增强审查机制 v3.6 — 端到端任务流程编排，6 种语言 pipe runner + machine signoff + 三阶段闭环 gate",
   "author": {
     "name": "David",
-    "url": "https://github.com/focus-tech"
+    "url": "https://github.com/heresun"
   },
-  "homepage": "https://github.com/focus-tech/aise",
-  "repository": "https://github.com/focus-tech/aise",
+  "homepage": "https://github.com/heresun/AISE",
+  "repository": "https://github.com/heresun/AISE",
   "license": "MIT",
   "keywords": [
     "aise",
@@ -19,6 +19,8 @@
     "multi-persona-review",
     "circuit-breaker",
     "knowledge-compound",
-    "cross-platform"
+    "cross-platform",
+    "pipe-runner",
+    "machine-signoff"
   ]
 }

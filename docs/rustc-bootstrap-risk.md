@@ -214,5 +214,5 @@ cargo test  # 没 -Z 也能跑，但输出是人类可读 text
 
 ---
 
-_本评估由 焦小糖团队（Anthropic Claude Code, Opus 4.7）生成。v3.4 P2-2
+_本评估由 AISE 团队生成。v3.4 P2-2
 RUSTC_BOOTSTRAP 风险评估 v1.0。_

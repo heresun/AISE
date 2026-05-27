@@ -127,4 +127,4 @@ tests/test_spike2_acceptance.py         ? 测试  (mac + 真实 Maven，待 Mave
 
 ---
 
-_本报告由 焦小糖团队（Anthropic Claude Code, Opus 4.7）生成。Spike-2 第 1 轮文档定稿。_
+_本报告由 AISE 团队生成。Spike-2 第 1 轮文档定稿。_

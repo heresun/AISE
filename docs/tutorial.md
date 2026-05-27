@@ -564,4 +564,4 @@ exit 2。
 
 ---
 
-_本教程由 焦小糖团队（Anthropic Claude Code, Opus 4.7）维护。v3.6.0。_
+_本教程由 AISE 团队维护。v3.6.0。_

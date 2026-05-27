@@ -1,15 +1,15 @@
 {
   "name": "aise",
   "owner": {
-    "name": "AISE",
-    "url": "https://github.com/focus-tech/aise"
+    "name": "heresun",
+    "url": "https://github.com/heresun/AISE"
   },
   "plugins": [
     {
       "name": "aise",
       "source": "./",
-      "description": "AISE 过程增强审查机制 v2 — 端到端任务流程编排（TDD / 多 persona 审查 / 智能熔断 / 知识沉淀闭环 / 双轨监控）",
-      "version": "1.0.0"
+      "description": "AISE 过程增强审查机制 v3.6 — 端到端任务流程编排 + 6 种语言 pipe runner + machine signoff + 三阶段闭环 gate",
+      "version": "3.6.0"
     }
   ]
 }
