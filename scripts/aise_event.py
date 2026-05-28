@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AISE pipe runner CLI（v3.2.5 §4.4.5 Spike-1 实现）
+"""AISE pipe runner CLI（v4.0 插件化架构）
 
 用法：
   python3 aise_event.py --pipe go-test-json-to-junit \\
@@ -11,18 +11,18 @@
 行为：
   1. preflight_pipe(pipe_name) → 失败 exit 127 + 平台安装指引
   2. defense_in_depth_check(targets, allowed) → 失败 exit 2
-  3. 按 pipe_name 决定真实命令：
-     - go-test-json-to-junit: cd project-root && go test -json <targets> | go-junit-report -out <out>/junit-<run>.xml
+  3. 通过 lib.runners 插件注册表分派到对应的 pipe runner
   4. 落盘 stdout 转储 + junit XML
   5. write_evidence() 把 (path, sha256, mtime, window) 记到 .aise/runs/<run_id>/evidence.jsonl
   6. 退出码：0 = 测试 + pipeline 都成功；1 = 测试失败但 pipeline 完整；2 = 状态异常；127 = 工具缺失
+
+v4.0：Pipe Runner 插件化 — 每个 pipe runner 独立在 lib/runners/ 下，新增 pipe 无需修改本文件。
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -32,10 +32,12 @@ from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import event_runner as er
-from lib import evidence as ev_lib
-from lib import surefire_collector as sc_lib
 from lib.ansi import maybe_strip
+from lib.runners import get_runner
 
+# 为 test_cargo_nextest.py 保持向后兼容
+from lib.runners.cargo_test_runner import _parse_targets as _parse_cargo_targets
+from lib.runners.cargo_nextest_runner import _parse_targets as _parse_cargo_nextest_targets
 
 # 默认允许的 target glob（Spike-1 简化：白名单写死）
 DEFAULT_ALLOWED_PATTERNS = ["./pkg/**", "./internal/**", "./cmd/**", "./...", "./pkg/...", "./internal/...", "./cmd/..."]
@@ -56,10 +58,6 @@ DEFAULT_JEST_ALLOWED_PATTERNS = [
 ]
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 def _emit_preflight_diagnostic(info: dict) -> None:
     print(f"[AISE-event] FAIL: --pipe {info.get('name')} 需要的工具 {info.get('bin')} 未安装",
           file=sys.stderr)
@@ -68,816 +66,6 @@ def _emit_preflight_diagnostic(info: dict) -> None:
     print(f"  安装命令: {info.get('install_hint', '')}", file=sys.stderr)
     if info.get("docs"):
         print(f"  文档: {info.get('docs')}", file=sys.stderr)
-
-
-def _extract_packages_from_system_out(suite: ET.Element) -> dict:
-    """fallback: 从 testsuite/system-out 中的 go test -json events 抓 Test→Package 映射。
-
-    go-junit-report v2 在 testsuite.name 留空时，原始 JSON 会内嵌到 <system-out>。
-    """
-    sys_out = suite.find("system-out")
-    if sys_out is None or not sys_out.text:
-        return {}
-    test_to_pkg: dict = {}
-    for line in sys_out.text.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        t = ev.get("Test")
-        pkg = ev.get("Package")
-        if t and pkg and t not in test_to_pkg:
-            test_to_pkg[t] = pkg
-    return test_to_pkg
-
-
-def _parse_junit_targets(junit_path: Path, run_id: str) -> List[dict]:
-    """解析 JUnit XML → actual_test_targets[]（v3.2.5 §4.1）
-
-    多源 provenance：
-      1. 优先 testsuite.name → parent_package
-      2. fallback：从 system-out 里的 go test -json events 提 Package
-    """
-    if not junit_path.exists():
-        return []
-    try:
-        tree = ET.parse(junit_path)
-    except ET.ParseError:
-        return []
-
-    targets: List[dict] = []
-    root = tree.getroot()
-    suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
-    rel_path = str(junit_path)
-    for suite in suites:
-        suite_pkg = suite.attrib.get("name", "")
-        fallback_map = _extract_packages_from_system_out(suite) if not suite_pkg else {}
-        for case in suite.findall("testcase"):
-            classname = case.attrib.get("classname", "")
-            name = case.attrib.get("name", "")
-            pkg = suite_pkg or fallback_map.get(name, "") or classname
-            targets.append({
-                "kind": "testcase",
-                "id": name,
-                "parent_class": classname,
-                "parent_package": pkg,
-                "parent_file": "",
-                "granularity": "testcase",
-                "source": "junit_xml",
-                "source_artifact_path": rel_path,
-                "passed": case.find("failure") is None and case.find("error") is None,
-            })
-    return targets
-
-
-def run_go_pipe(
-    project_root: Path,
-    targets: List[str],
-    out_dir: Path,
-    run_id: str,
-    junit_bin: str,
-) -> tuple[int, dict]:
-    """执行 go test -json <targets> | go-junit-report -out <out>/junit.xml
-    返回 (exit_code, summary_dict)
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    junit_path = out_dir / f"junit-{run_id}.xml"
-    stdout_dump = out_dir / f"go-test-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"go-test-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    # spawn `go test -v -json <targets>`，stdout 通过 pipe 给 go-junit-report
-    # -v 让 go-junit-report 能拿到 Package 信息填到 <testsuite name>
-    go_cmd = ["go", "test", "-v", "-json"] + targets
-    junit_cmd = [junit_bin, "-set-exit-code", "-out", str(junit_path)]
-
-    # 先把 go test stdout 收下来再喂给 go-junit-report，便于 stdout dump
-    go_proc = subprocess.run(
-        go_cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-    )
-    stdout_dump.write_text(maybe_strip(go_proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(go_proc.stderr), encoding="utf-8")
-
-    junit_proc = subprocess.run(
-        junit_cmd,
-        cwd=str(project_root),
-        input=go_proc.stdout,
-        capture_output=True,
-        text=True,
-    )
-
-    window_end = _now_ms()
-
-    test_ok = (go_proc.returncode == 0)
-    # junit_ok 判定：XML 文件落盘且可解析；不依赖 junit_proc.returncode，
-    # 因为 -set-exit-code 让 go-junit-report 在测试失败时也 exit 1（pipeline 本身仍正常）。
-    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
-    if junit_ok:
-        try:
-            ET.parse(junit_path)
-        except ET.ParseError:
-            junit_ok = False
-
-    # 收集 evidence artifact
-    artifacts = []
-    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="go-test-json-to-junit",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    # 解析 actual_test_targets
-    actual_targets = _parse_junit_targets(junit_path, run_id)
-
-    summary = {
-        "pipe": "go-test-json-to-junit",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "targets_declared": targets,
-        "junit_xml": str(junit_path),
-        "stdout_dump": str(stdout_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": go_proc.returncode,
-        "junit_exit_code": junit_proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": junit_ok,
-    }
-
-    # exit: 0 = 全 ok；1 = 测试失败但 pipeline 完整
-    if not junit_ok:
-        return 2, summary  # pipeline 异常视为状态异常
-    return (0 if test_ok else 1), summary
-
-
-def _parse_surefire_targets(junit_files: List[Path]) -> List[dict]:
-    """聚合多个 Surefire/Failsafe XML → actual_test_targets[]（v3.2.5 §4.1）
-
-    每个 testcase 携带 source_artifact_path（去重 key 一部分），
-    供 Surefire vs Failsafe 同名 testcase 按 source 区分（应 P1-B）。
-    """
-    targets: List[dict] = []
-    for jx in junit_files:
-        if not jx.exists():
-            continue
-        try:
-            tree = ET.parse(jx)
-        except ET.ParseError:
-            continue
-        root = tree.getroot()
-        suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
-        rel_path = str(jx)
-        for suite in suites:
-            pkg = suite.attrib.get("name", "")  # Surefire 通常是 fully-qualified class name
-            for case in suite.findall("testcase"):
-                classname = case.attrib.get("classname", "")
-                name = case.attrib.get("name", "")
-                # Surefire 把 package 放在 classname（"sample.CalcTest"），suite.name 同
-                parent_package = classname.rsplit(".", 1)[0] if "." in classname else pkg
-                targets.append({
-                    "kind": "testcase",
-                    "id": name,
-                    "parent_class": classname,
-                    "parent_package": parent_package,
-                    "parent_file": "",
-                    "granularity": "testcase",
-                    "source": "junit_xml",
-                    "source_artifact_path": rel_path,
-                    "passed": case.find("failure") is None and case.find("error") is None,
-                })
-    return targets
-
-
-def run_mvn_surefire_pipe(
-    project_root: Path,
-    out_dir: Path,
-    run_id: str,
-    mvn_bin: str,
-    extra_system_props: List[str],
-    skip_failsafe: bool = True,
-) -> tuple[int, dict]:
-    """执行 mvn test [systemProps] → collect_surefire_xmls → 聚合 actual_test_targets。
-
-    extra_system_props: ["forceFail=true", ...]，会被转为 -DforceFail=true。
-    skip_failsafe: True 时仅跑 surefire（mvn test），False 跑 surefire + failsafe（mvn verify）。
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stdout_dump = out_dir / f"mvn-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"mvn-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    mvn_goal = "test" if skip_failsafe else "verify"
-    cmd = [mvn_bin, "-B", "-q", mvn_goal]
-    for kv in extra_system_props:
-        cmd.append(f"-D{kv}")
-
-    mvn_proc = subprocess.run(
-        cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-    )
-    stdout_dump.write_text(maybe_strip(mvn_proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(mvn_proc.stderr), encoding="utf-8")
-
-    window_end = _now_ms()
-    test_ok = (mvn_proc.returncode == 0)
-
-    # 收 surefire/failsafe XML 到 out_dir
-    collect_result = sc_lib.collect_surefire_xmls(project_root, out_dir)
-    collected = collect_result["collected"]
-
-    # 解析聚合 actual_test_targets
-    junit_paths = [Path(r["dst"]) for r in collected]
-    actual_targets = _parse_surefire_targets(junit_paths)
-
-    # 收 evidence：每个 collected XML + stdout/stderr dump
-    artifacts = []
-    for rec in collected:
-        ev = ev_lib.collect_artifact(
-            path=Path(rec["dst"]),
-            runner=f"mvn-surefire/{rec['origin']}",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source="junit_xml",
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-    for path, source in [(stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="mvn-surefire",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    pipeline_ok = len(collected) > 0  # 至少一个 JUnit XML 落盘视为 pipeline 健康
-
-    summary = {
-        "pipe": "mvn-surefire",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "mvn_goal": mvn_goal,
-        "extra_system_props": extra_system_props,
-        "collected": collected,
-        "stdout_dump": str(stdout_dump),
-        "stderr_dump": str(stderr_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": mvn_proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": pipeline_ok,
-        "collect_warnings": collect_result["warnings"],
-    }
-
-    if not pipeline_ok:
-        return 2, summary
-    return (0 if test_ok else 1), summary
-
-
-def _parse_pytest_targets(junit_path: Path) -> List[dict]:
-    """解析 pytest 产出的 JUnit XML → actual_test_targets[]。
-
-    pytest 默认结构：<testsuite name="pytest" ...><testcase classname="tests.test_calc"
-    name="test_add" file="tests/test_calc.py" line="..."/>。
-    parent_package 取 classname 最后一个 `.` 之前的部分（去掉 ClassName 或 module 末段）。
-    若 classname 无 `.`，取整体作为 package。
-    """
-    if not junit_path.exists():
-        return []
-    try:
-        tree = ET.parse(junit_path)
-    except ET.ParseError:
-        return []
-
-    targets: List[dict] = []
-    root = tree.getroot()
-    suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
-    rel_path = str(junit_path)
-    for suite in suites:
-        for case in suite.findall("testcase"):
-            classname = case.attrib.get("classname", "")
-            name = case.attrib.get("name", "")
-            file_attr = case.attrib.get("file", "")
-            if "." in classname:
-                parent_package = classname.rsplit(".", 1)[0]
-            else:
-                parent_package = classname
-            targets.append({
-                "kind": "testcase",
-                "id": name,
-                "parent_class": classname,
-                "parent_package": parent_package,
-                "parent_file": file_attr,
-                "granularity": "testcase",
-                "source": "junit_xml",
-                "source_artifact_path": rel_path,
-                "passed": case.find("failure") is None and case.find("error") is None,
-            })
-    return targets
-
-
-def run_pytest_pipe(
-    project_root: Path,
-    targets: List[str],
-    out_dir: Path,
-    run_id: str,
-    pytest_bin: str,
-    extra_args: List[str],
-) -> tuple[int, dict]:
-    """spawn `pytest --junit-xml=$OUT/junit.xml $targets $extra_args`."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    junit_path = out_dir / f"junit-{run_id}.xml"
-    stdout_dump = out_dir / f"pytest-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"pytest-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    # 用 python3 -m pytest 形式更稳健（pytest_bin 可能是 `pytest` 也可能是 python3 路径）
-    if pytest_bin == "python3 -m pytest" or pytest_bin == "python -m pytest":
-        cmd = pytest_bin.split() + [f"--junit-xml={junit_path}"]
-    else:
-        cmd = [pytest_bin, f"--junit-xml={junit_path}"]
-    cmd += list(extra_args or [])
-    if targets:
-        cmd += targets
-
-    proc = subprocess.run(
-        cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
-
-    window_end = _now_ms()
-    test_ok = (proc.returncode == 0)
-    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
-    if junit_ok:
-        try:
-            ET.parse(junit_path)
-        except ET.ParseError:
-            junit_ok = False
-
-    artifacts = []
-    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="pytest-junitxml",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    actual_targets = _parse_pytest_targets(junit_path)
-
-    summary = {
-        "pipe": "pytest-junitxml",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "targets_declared": targets,
-        "junit_xml": str(junit_path),
-        "stdout_dump": str(stdout_dump),
-        "stderr_dump": str(stderr_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": junit_ok,
-    }
-
-    if not junit_ok:
-        return 2, summary
-    return (0 if test_ok else 1), summary
-
-
-def _parse_jest_targets(junit_path: Path) -> List[dict]:
-    """解析 jest-junit 产出的 JUnit XML → actual_test_targets[]。
-
-    jest-junit 默认结构：
-      <testsuites name="jest tests">
-        <testsuite name="calc" file="calc.test.js">
-          <testcase classname="calc add" name="add"/>
-          <testcase classname="calc isEven" name="isEven"/>
-    classname 默认是 "describeBlock testName"，name 是 testName。
-    parent_package = testsuite.file 的目录部分 + 文件名（无扩展）作为模块标识。
-    parent_file 取 testsuite.file。
-    """
-    if not junit_path.exists():
-        return []
-    try:
-        tree = ET.parse(junit_path)
-    except ET.ParseError:
-        return []
-
-    targets: List[dict] = []
-    root = tree.getroot()
-    suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
-    rel_path = str(junit_path)
-    for suite in suites:
-        suite_name = suite.attrib.get("name", "")  # 通常是顶层 describe 名
-        suite_file = suite.attrib.get("file", "")
-        for case in suite.findall("testcase"):
-            classname = case.attrib.get("classname", "")
-            name = case.attrib.get("name", "")
-            # parent_package：用顶层 describe 名作为"包"概念（Jest 没有原生 package）
-            parent_package = suite_name
-            targets.append({
-                "kind": "testcase",
-                "id": name,
-                "parent_class": classname,
-                "parent_package": parent_package,
-                "parent_file": suite_file,
-                "granularity": "testcase",
-                "source": "junit_xml",
-                "source_artifact_path": rel_path,
-                "passed": case.find("failure") is None and case.find("error") is None,
-            })
-    return targets
-
-
-def run_jest_pipe(
-    project_root: Path,
-    targets: List[str],
-    out_dir: Path,
-    run_id: str,
-    extra_args: List[str],
-) -> tuple[int, dict]:
-    """spawn npx jest 在 project_root 跑测试，jest-junit reporter 落盘 JUnit XML。
-
-    依赖 fixture 内 package.json 已配置 jest + jest-junit dev deps 并 npm install。
-    JUnit XML 路径通过 JEST_JUNIT_OUTPUT_DIR / JEST_JUNIT_OUTPUT_NAME 环境变量控制。
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    junit_name = f"junit-{run_id}.xml"
-    junit_path = out_dir / junit_name
-    stdout_dump = out_dir / f"jest-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"jest-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    # v3.3 P1-1：用 resolve_runtime_bin 统一查找（fixture 内 ./node_modules/.bin/jest）
-    ok_rt, rt_info = er.resolve_runtime_bin("jest-junit", project_root)
-    if not ok_rt:
-        # 找不到 → 退到 npx 兜底（不联网装包，仅查本地）
-        cmd = ["npx", "--no-install", "jest"]
-    else:
-        cmd = [rt_info["path"]]
-
-    cmd += list(extra_args or [])
-    if targets:
-        cmd += targets
-
-    env = os.environ.copy()
-    env["JEST_JUNIT_OUTPUT_DIR"] = str(out_dir)
-    env["JEST_JUNIT_OUTPUT_NAME"] = junit_name
-
-    proc = subprocess.run(
-        cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
-
-    window_end = _now_ms()
-    test_ok = (proc.returncode == 0)
-    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
-    if junit_ok:
-        try:
-            ET.parse(junit_path)
-        except ET.ParseError:
-            junit_ok = False
-
-    artifacts = []
-    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="jest-junit",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    actual_targets = _parse_jest_targets(junit_path)
-
-    summary = {
-        "pipe": "jest-junit",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "targets_declared": targets,
-        "junit_xml": str(junit_path),
-        "stdout_dump": str(stdout_dump),
-        "stderr_dump": str(stderr_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": junit_ok,
-    }
-
-    if not junit_ok:
-        return 2, summary
-    return (0 if test_ok else 1), summary
-
-
-def _parse_cargo_targets(junit_path: Path) -> List[dict]:
-    """解析 cargo2junit 产出的 JUnit XML → actual_test_targets[]。
-
-    cargo2junit 输出：
-      <testsuites>
-        <testsuite name="my_crate"><testcase name="tests::test_add" classname="tests"/>
-    name 含 `::` 分隔的模块路径 + 函数名。parent_package = 模块路径。
-    """
-    if not junit_path.exists():
-        return []
-    try:
-        tree = ET.parse(junit_path)
-    except ET.ParseError:
-        return []
-
-    targets: List[dict] = []
-    root = tree.getroot()
-    suites = root.findall(".//testsuite") if root.tag != "testsuite" else [root]
-    rel_path = str(junit_path)
-    for suite in suites:
-        for case in suite.findall("testcase"):
-            classname = case.attrib.get("classname", "")
-            name = case.attrib.get("name", "")
-            # cargo2junit 实测：testcase.classname 已是 Rust 模块路径（如 "tests"），
-            # testcase.name 是测试函数短名（如 "test_add"）
-            parent_package = classname
-            targets.append({
-                "kind": "testcase",
-                "id": name,
-                "parent_class": classname,
-                "parent_package": parent_package,
-                "parent_file": "",
-                "granularity": "testcase",
-                "source": "junit_xml",
-                "source_artifact_path": rel_path,
-                "passed": case.find("failure") is None and case.find("error") is None,
-            })
-    return targets
-
-
-def run_cargo_pipe(
-    project_root: Path,
-    out_dir: Path,
-    run_id: str,
-    cargo_bin: str,
-    cargo2junit_bin: str,
-    extra_args: List[str],
-) -> tuple[int, dict]:
-    """spawn `cargo test --no-fail-fast -- -Z unstable-options --format json --report-time`
-    或 `cargo test -- -Z unstable-options --format json` 然后管道给 cargo2junit。
-
-    cargo2junit 期望 stdin 是 cargo test --format json 输出。
-    注意：JSON 格式输出在 stable 上需要 `--format` flag 通过 `--`; 部分版本需要 nightly。
-    Spike-3 采用 `RUSTC_BOOTSTRAP=1` + `-Z unstable-options` 在 stable toolchain 强制启用。
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    junit_path = out_dir / f"junit-{run_id}.xml"
-    stdout_dump = out_dir / f"cargo-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"cargo-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    # cargo test --no-run 先编译，再用 --no-fail-fast + json
-    cargo_cmd = [cargo_bin, "test", "--no-fail-fast", "--",
-                 "-Z", "unstable-options", "--format", "json", "--report-time"]
-    cargo_cmd += list(extra_args or [])
-
-    env = os.environ.copy()
-    env["RUSTC_BOOTSTRAP"] = "1"  # stable toolchain 启用 unstable -Z
-
-    cargo_proc = subprocess.run(
-        cargo_cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
-    stdout_dump.write_text(maybe_strip(cargo_proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(cargo_proc.stderr), encoding="utf-8")
-
-    # cargo test stdout 夹杂非 JSON 行（Compiling / Finished / Running unittests ...）
-    # cargo2junit 期望纯 JSON 流 → 过滤
-    json_lines = [
-        line for line in cargo_proc.stdout.splitlines()
-        if line.strip().startswith("{") and line.strip().endswith("}")
-    ]
-    cargo_json = "\n".join(json_lines)
-
-    junit_proc = subprocess.run(
-        [cargo2junit_bin],
-        cwd=str(project_root),
-        input=cargo_json,
-        capture_output=True,
-        text=True,
-    )
-    if junit_proc.stdout:
-        junit_path.write_text(junit_proc.stdout, encoding="utf-8")
-
-    window_end = _now_ms()
-    test_ok = (cargo_proc.returncode == 0)
-    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
-    if junit_ok:
-        try:
-            ET.parse(junit_path)
-        except ET.ParseError:
-            junit_ok = False
-
-    artifacts = []
-    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="cargo-test-junit",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    actual_targets = _parse_cargo_targets(junit_path)
-
-    summary = {
-        "pipe": "cargo-test-junit",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "junit_xml": str(junit_path),
-        "stdout_dump": str(stdout_dump),
-        "stderr_dump": str(stderr_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": cargo_proc.returncode,
-        "junit_exit_code": junit_proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": junit_ok,
-    }
-
-    if not junit_ok:
-        return 2, summary
-    return (0 if test_ok else 1), summary
-
-
-def run_cargo_nextest_pipe(
-    project_root: Path,
-    out_dir: Path,
-    run_id: str,
-    cargo_bin: str,
-    extra_args: List[str],
-) -> tuple[int, dict]:
-    """跑 cargo nextest run --message-format junit。
-
-    与 cargo-test-junit 的区别：
-      - 不需要 RUSTC_BOOTSTRAP=1（nextest 在 stable Rust 原生支持 JUnit）
-      - 不需要管道（nextest 直接落盘 JUnit XML 到
-        target/nextest/<profile>/junit.xml，AISE 拷贝到 out_dir）
-      - 速度更快（并行 + 独立进程隔离）
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    junit_path = out_dir / f"junit-{run_id}.xml"
-    stdout_dump = out_dir / f"nextest-{run_id}.stdout.log"
-    stderr_dump = out_dir / f"nextest-{run_id}.stderr.log"
-
-    window_start = _now_ms()
-
-    # cargo nextest run --no-fail-fast
-    # nextest 通过 .config/nextest.toml 的 [profile.default.junit] 配置控制 JUnit 输出
-    # 路径：target/nextest/default/junit.xml
-    # 不使用 --message-format（libtest-json 在 stable Rust 上仍是 unstable）
-    cargo_cmd = [cargo_bin, "nextest", "run", "--no-fail-fast"]
-    cargo_cmd += list(extra_args or [])
-
-    proc = subprocess.run(
-        cargo_cmd,
-        cwd=str(project_root),
-        capture_output=True,
-        text=True,
-    )
-    stdout_dump.write_text(maybe_strip(proc.stdout), encoding="utf-8")
-    stderr_dump.write_text(maybe_strip(proc.stderr), encoding="utf-8")
-
-    window_end = _now_ms()
-    test_ok = (proc.returncode == 0)
-
-    # nextest 写 JUnit 到 target/nextest/<profile>/junit.xml；profile 由
-    # .config/nextest.toml 决定（默认 default）。若 fixture 缺配置则 junit.xml
-    # 不存在，junit_ok = False，summary 中可见 stderr 帮助用户排错。
-    # 多 profile 兜底：扫描 target/nextest/*/junit.xml 取最新
-    nextest_root = project_root / "target" / "nextest"
-    candidates = []
-    if nextest_root.exists():
-        for profile_dir in nextest_root.iterdir():
-            jx = profile_dir / "junit.xml"
-            if jx.exists():
-                candidates.append((jx.stat().st_mtime, jx))
-    if candidates:
-        candidates.sort(reverse=True)
-        src = candidates[0][1]
-        try:
-            junit_path.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-        except OSError:
-            pass
-
-    junit_ok = junit_path.exists() and junit_path.stat().st_size > 0
-    if junit_ok:
-        try:
-            ET.parse(junit_path)
-        except ET.ParseError:
-            junit_ok = False
-
-    artifacts = []
-    for path, source in [(junit_path, "junit_xml"), (stdout_dump, "stdout_dump"), (stderr_dump, "stdout_dump")]:
-        ev = ev_lib.collect_artifact(
-            path=path,
-            runner="cargo-nextest-junit",
-            window_start_ms=window_start,
-            window_end_ms=window_end,
-            source=source,
-            ok=test_ok,
-            project_root=project_root,
-        )
-        if ev:
-            artifacts.append(ev)
-    ev_path = ev_lib.write_evidence(artifacts, project_root, run_id=run_id)
-
-    actual_targets = _parse_cargo_targets(junit_path)  # 复用 cargo2junit parser
-
-    summary = {
-        "pipe": "cargo-nextest-junit",
-        "run_id": run_id,
-        "project_root": str(project_root),
-        "junit_xml": str(junit_path),
-        "stdout_dump": str(stdout_dump),
-        "stderr_dump": str(stderr_dump),
-        "evidence_jsonl": str(ev_path),
-        "window_start_ms": window_start,
-        "window_end_ms": window_end,
-        "test_exit_code": proc.returncode,
-        "actual_test_targets": actual_targets,
-        "test_ok": test_ok,
-        "junit_ok": junit_ok,
-    }
-
-    if not junit_ok:
-        return 2, summary
-    return (0 if test_ok else 1), summary
 
 
 def main() -> int:
@@ -927,7 +115,7 @@ def main() -> int:
     elif args.pipe == "jest-junit":
         allowed = DEFAULT_JEST_ALLOWED_PATTERNS
     elif args.pipe == "cargo-test-junit":
-        allowed = ["*"]  # cargo target 是 crate 内测试函数路径，简化放行
+        allowed = ["*"]
     else:
         allowed = DEFAULT_ALLOWED_PATTERNS
     if args.target:
@@ -947,15 +135,20 @@ def main() -> int:
         print(f"  allowed: {info2.get('allowed')}", file=sys.stderr)
         return er.EXIT_CODE_TARGET_BREACHED
 
-    # Step 3: dispatch by pipe
+    # Step 3: 通过插件注册表分派 pipe runner
     project_root = Path(args.project_root).resolve()
     run_id = args.run_id or time.strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.out_dir).resolve() if args.out_dir else (
         project_root / ".aise" / "runs" / run_id / "test_reports"
     )
 
+    pipe_runner = get_runner(args.pipe)
+    if pipe_runner is None:
+        print(f"[AISE-event] 未知 pipe {args.pipe}", file=sys.stderr)
+        return 2
+
     if args.pipe == "go-test-json-to-junit":
-        exit_code, summary = run_go_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             targets=targets,
             out_dir=out_dir,
@@ -963,7 +156,7 @@ def main() -> int:
             junit_bin=info["found"],
         )
     elif args.pipe == "mvn-surefire":
-        exit_code, summary = run_mvn_surefire_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             out_dir=out_dir,
             run_id=run_id,
@@ -972,7 +165,7 @@ def main() -> int:
             skip_failsafe=not args.mvn_include_failsafe,
         )
     elif args.pipe == "pytest-junitxml":
-        exit_code, summary = run_pytest_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             targets=args.target,
             out_dir=out_dir,
@@ -981,7 +174,7 @@ def main() -> int:
             extra_args=args.pytest_extra_arg,
         )
     elif args.pipe == "jest-junit":
-        exit_code, summary = run_jest_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             targets=args.target,
             out_dir=out_dir,
@@ -989,15 +182,13 @@ def main() -> int:
             extra_args=args.jest_extra_arg,
         )
     elif args.pipe == "cargo-test-junit":
-        # v3.3 P1-1：preflight 校验的是 cargo2junit（info["found"]），
-        # runtime 实际跑 cargo —— 用 resolve_runtime_bin 显式分离
         cargo2junit_bin = info["found"]
         ok_rt, rt_info = er.resolve_runtime_bin("cargo-test-junit", project_root)
         if not ok_rt:
             print(f"[AISE-event] FAIL: cargo runtime bin 缺失\n  info: {rt_info}",
                   file=sys.stderr)
             return er.EXIT_CODE_TOOL_MISSING
-        exit_code, summary = run_cargo_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             out_dir=out_dir,
             run_id=run_id,
@@ -1006,13 +197,12 @@ def main() -> int:
             extra_args=args.cargo_extra_arg,
         )
     elif args.pipe == "cargo-nextest-junit":
-        # v3.5：nextest 是 cargo 子命令，runtime 实际跑 cargo
         ok_rt, rt_info = er.resolve_runtime_bin("cargo-nextest-junit", project_root)
         if not ok_rt:
             print(f"[AISE-event] FAIL: cargo runtime bin 缺失\n  info: {rt_info}",
                   file=sys.stderr)
             return er.EXIT_CODE_TOOL_MISSING
-        exit_code, summary = run_cargo_nextest_pipe(
+        exit_code, summary = pipe_runner(
             project_root=project_root,
             out_dir=out_dir,
             run_id=run_id,
@@ -1020,8 +210,7 @@ def main() -> int:
             extra_args=args.nextest_extra_arg,
         )
     else:
-        print(f"[AISE-event] v3.5 已支持 go/mvn/pytest/jest/cargo/cargo-nextest；{args.pipe} 未识别",
-              file=sys.stderr)
+        print(f"[AISE-event] 不支持的 pipe：{args.pipe}", file=sys.stderr)
         return 2
 
     # Step 4: emit summary
