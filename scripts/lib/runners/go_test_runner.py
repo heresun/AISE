@@ -137,3 +137,24 @@ def run(
     if not junit_ok:
         return 2, summary
     return (0 if test_ok else 1), summary
+
+
+SPEC = {
+    "name": "go-test-json-to-junit",
+    "default_allowed_patterns": [
+        "./pkg/**", "./internal/**", "./cmd/**",
+        "./...", "./pkg/...", "./internal/...", "./cmd/...",
+    ],
+    "default_targets": ["./..."],
+    "accepts_targets": True,
+}
+
+
+def invoke(ctx) -> tuple[int, dict]:
+    return run(
+        project_root=ctx.project_root,
+        targets=ctx.targets or SPEC["default_targets"],
+        out_dir=ctx.out_dir,
+        run_id=ctx.run_id,
+        junit_bin=ctx.preflight_info["found"],
+    )

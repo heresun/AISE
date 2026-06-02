@@ -120,3 +120,26 @@ def run(
     if not junit_ok:
         return 2, summary
     return (0 if test_ok else 1), summary
+
+
+SPEC = {
+    "name": "pytest-junitxml",
+    "default_allowed_patterns": [
+        "tests", "tests/**", "./tests", "./tests/**",
+        "test_*.py", "*_test.py", "tests/test_*.py", "tests/**/test_*.py", ".",
+    ],
+    "default_targets": ["tests"],
+    "accepts_targets": True,
+}
+
+
+def invoke(ctx) -> tuple[int, dict]:
+    # 复制原行为：pytest run 收到原始 --target（空则交给 pytest 自身默认），不在此填默认
+    return run(
+        project_root=ctx.project_root,
+        targets=ctx.targets,
+        out_dir=ctx.out_dir,
+        run_id=ctx.run_id,
+        pytest_bin=ctx.preflight_info["found"],
+        extra_args=ctx.extra.get("pytest_extra_arg", []),
+    )

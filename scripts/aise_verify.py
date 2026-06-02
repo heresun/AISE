@@ -27,6 +27,7 @@ from pathlib import Path
 
 # 让 scripts/lib 可 import
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import anchor as anchor_lib  # noqa: E402
 from lib import evidence as ev_lib  # noqa: E402
 from lib import preflight as pf_lib  # noqa: E402
 from lib import snapshot as snap_lib  # noqa: E402
@@ -215,6 +216,17 @@ def _do_verify_evidence(project_root: Path) -> int:
     evidence_path = latest / "evidence.jsonl"
     print(f"[AISE-verify] 重校验 evidence: {evidence_path}")
     ok, violations = ev_lib.verify_evidence(evidence_path, project_root)
+
+    # 附加：内容外锚校验（#8，git hash-object 内容寻址；无 git/无 anchor 自动放行）
+    if (latest / "anchor.json").exists():
+        a_ok, a_violations = anchor_lib.verify_anchor(latest.name, project_root)
+        real = [v for v in a_violations if v.get("code") != "anchor_skipped"]
+        if a_ok and not real:
+            print("[AISE-verify] 内容外锚校验通过（tamper-evident）")
+        if real:
+            ok = False
+            violations = list(violations) + [{"anchor": v} for v in real]
+
     if ok:
         print("[AISE-verify] evidence 全部签收，未发现篡改")
         return 0
@@ -266,6 +278,10 @@ def main() -> int:
     if evidences:
         ev_path = ev_lib.write_evidence(evidences, project_root, run_id=run_id)
         print(f"[AISE-verify] evidence 链 ({len(evidences)} 条) → {ev_path}")
+        # 内容外锚（#8）：写入 .git/objects + 独立 ref，提高篡改成本 + 留痕；无 git 自动跳过
+        anchor_result = anchor_lib.anchor_run(run_id, project_root)
+        if anchor_result["status"] == "anchored":
+            print(f"[AISE-verify] 内容外锚 {anchor_result['anchored']} 件 → ref {anchor_result['ref']}")
 
     aise_dir = project_root / ".aise"
     if aise_dir.exists():

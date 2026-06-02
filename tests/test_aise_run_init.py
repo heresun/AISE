@@ -272,3 +272,47 @@ def test_run_init_run_context_includes_normalized_tasks(tmp_path: Path) -> None:
     ctx = json.loads(ctx_path.read_text("utf-8"))
     assert ctx["tasks"][0]["task_id"] == "T-001"
     assert "src/calc/**" in ctx["tasks"][0]["scope"]["paths"]
+
+
+# ----------------------------- --validate-only 模式（#4 错误前移） -----------------------------
+
+
+def _run_validate_only(project_root: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(RUN_INIT), "--project-root", str(project_root),
+         "--validate-only"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+
+
+def test_validate_only_passes_without_creating_run(tmp_path: Path) -> None:
+    """--validate-only：有效 plan 应 exit 0，且只校验——不创建 runs / snapshot."""
+    _write_plan(tmp_path, _minimal_valid_plan())
+    proc = _run_validate_only(tmp_path)
+    assert proc.returncode == 0, f"valid plan 应通过校验: stderr={proc.stderr}"
+    assert not (tmp_path / ".aise" / "runs").exists(), "--validate-only 不应创建 runs 目录"
+    assert not (tmp_path / ".aise" / "plan.snapshot.json").exists(), \
+        "--validate-only 不应创建 snapshot"
+
+
+def test_validate_only_fails_on_invalid_plan(tmp_path: Path) -> None:
+    """--validate-only：无效 plan 应 exit 2 并报真正的校验错误（非 argparse usage）."""
+    p = _minimal_valid_plan()
+    p["tasks"][0]["test_manifest"]["pipe"] = "fake-runner"
+    _write_plan(tmp_path, p)
+    proc = _run_validate_only(tmp_path)
+    assert proc.returncode == 2
+    assert "pipe" in proc.stderr  # 校验级错误，区别于 argparse 的 unrecognized arguments
+    assert not (tmp_path / ".aise" / "runs").exists()
+
+
+def test_validate_only_missing_plan_fails(tmp_path: Path) -> None:
+    """--validate-only：plan.json 不存在仍 exit 2，给出可读提示."""
+    (tmp_path / ".aise").mkdir()
+    proc = _run_validate_only(tmp_path)
+    assert proc.returncode == 2
+    assert "plan.json" in proc.stderr

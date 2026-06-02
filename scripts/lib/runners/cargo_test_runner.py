@@ -131,3 +131,28 @@ def run(
     if not junit_ok:
         return 2, summary
     return (0 if test_ok else 1), summary
+
+
+SPEC = {
+    "name": "cargo-test-junit",
+    "default_allowed_patterns": ["*"],
+    "default_targets": [],
+    "accepts_targets": False,
+}
+
+
+def invoke(ctx) -> tuple[int, dict]:
+    from lib import event_runner as er
+    from .base import RuntimeBinMissing
+
+    ok_rt, rt_info = er.resolve_runtime_bin("cargo-test-junit", ctx.project_root)
+    if not ok_rt:
+        raise RuntimeBinMissing(rt_info)
+    return run(
+        project_root=ctx.project_root,
+        out_dir=ctx.out_dir,
+        run_id=ctx.run_id,
+        cargo_bin=rt_info["path"],
+        cargo2junit_bin=ctx.preflight_info["found"],
+        extra_args=ctx.extra.get("cargo_extra_arg", []),
+    )

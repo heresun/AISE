@@ -138,3 +138,22 @@ def run(
     if not pipeline_ok:
         return 2, summary
     return (0 if test_ok else 1), summary
+
+
+SPEC = {
+    "name": "mvn-surefire",
+    "default_allowed_patterns": ["*Test", "*Tests", "*IT", "*Test#*", "*Tests#*", "*IT#*", "*"],
+    "default_targets": [],
+    "accepts_targets": False,
+}
+
+
+def invoke(ctx) -> tuple[int, dict]:
+    return run(
+        project_root=ctx.project_root,
+        out_dir=ctx.out_dir,
+        run_id=ctx.run_id,
+        mvn_bin=ctx.preflight_info["found"],
+        extra_system_props=ctx.extra.get("mvn_system_property", []),
+        skip_failsafe=not ctx.extra.get("mvn_include_failsafe", False),
+    )

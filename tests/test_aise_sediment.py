@@ -58,7 +58,7 @@ def test_main_with_file_body(tmp_path: Path, capsys):
 def test_main_with_global_flag(tmp_path: Path, monkeypatch, capsys):
     import sys
     from scripts.aise_sediment import main
-    global_dir = tmp_path / "global_patterns"
+    global_dir = tmp_path / ".claude" / "docs" / "patterns"
     monkeypatch.setattr("scripts.aise_sediment.Path.home", lambda: tmp_path)
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     (tmp_path / ".claude" / "docs" / "patterns").mkdir(parents=True, exist_ok=True)

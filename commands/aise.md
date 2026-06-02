@@ -14,6 +14,24 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, Agent, TaskCreate, Ta
 - `$ARGUMENTS` 描述本次要做的事情
 - 若 `$ARGUMENTS` 为空，向用户询问任务目标
 
+## 流程编排（引擎驱动）
+
+本流程由 `.aise/workflow.json` 声明式定义（`aise_init.py` 会拷贝到使用方 `.aise/`）。
+每个步骤对应一个工作流节点，**关键条件跳转由引擎裁决，不要在本文档写死**：
+
+```
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_workflow.py" --from <node> --exit-code <code>
+```
+
+步骤 ↔ 节点映射：
+步骤0 `[node: env_init]` · 步骤1 `[node: brainstorm]` · 步骤2 `[node: plan_mode]` `[node: run_init]` ·
+步骤3 `[node: planning]` · 步骤4 `[node: task_loop]` · 步骤5 `[node: verify]` ·
+步骤6 `[node: review]` · 步骤7 `[node: fuse]` · 步骤8 `[node: sediment]` · 步骤9 `[node: dashboard]`
+
+关键条件跳转（查引擎，按返回的 `next` 跳转）：
+- `verify`：exit 0 → `review`；exit≠0 → 回 `task_loop` 重试
+- `fuse`：exit 0 → `sediment`；exit 1 → 回 `task_loop`
+
 ## 执行步骤
 
 ### 步骤 0：环境准备
@@ -44,10 +62,16 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Skill, Agent, TaskCreate, Ta
 ### 步骤 3：任务分割（DAG）
 
 调用 **`aise-planning-with-files`** skill，产出：
-- `.aise/plan.json` — 机器可读（schema 详见 `docs/plan-schema.md`）
+- `.aise/plan.json` — 机器可读，**严格遵循 `docs/plan-schema.json`**（机器可读 schema，叙述见 `docs/plan-schema.md`）
 - `.aise/plan.md` — 人类可读
 
 `test_manifest.pipe` 支持：`go-test-json-to-junit` / `mvn-surefire` / `pytest-junitxml` / `jest-junit` / `cargo-test-junit` / `cargo-nextest-junit`
+
+**生成即自检（错误前移）**：写出 `.aise/plan.json` 后立即校验，把格式错误挡在 run 创建之前：
+```
+python "${CLAUDE_PLUGIN_ROOT}/scripts/aise_run_init.py" --project-root "$(pwd)" --validate-only
+```
+exit 0 = 通过；exit 2 = 校验失败，按 stderr 提示修正 `plan.json` 后重试，**不要带病进入步骤 4**。
 
 ### 步骤 4：任务执行（TDD）
 

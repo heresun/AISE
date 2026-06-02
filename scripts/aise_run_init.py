@@ -281,6 +281,8 @@ def main() -> int:
     parser.add_argument("--project-root", default=None, help="项目根目录")
     parser.add_argument("--task-title-override", default=None,
                         help="覆盖 plan.json 的 task_title（不修改文件，仅 run_context）")
+    parser.add_argument("--validate-only", action="store_true",
+                        help="只校验 plan.json（不分配 run_id / 不建 snapshot），供 planning 末尾自检")
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve() if args.project_root else Path.cwd()
@@ -310,6 +312,11 @@ def main() -> int:
         for e in errors:
             _err(f"  - {e}")
         return 2
+
+    if args.validate_only:
+        print("[AISE-run-init] plan 校验通过（--validate-only，未创建 run）")
+        print(f"  tasks: {len(plan['tasks'])}")
+        return 0
 
     # 校验通过 → 创建 snapshot + run_id
     try:

@@ -1,0 +1,84 @@
+{
+  "version": "1.0",
+  "name": "aise-full-workflow",
+  "allow_cycles": true,
+  "start": "env_init",
+  "nodes": {
+    "env_init": {
+      "type": "script",
+      "description": "初始化 .aise/ 目录，检查进度",
+      "script": "aise_init.py",
+      "on_complete": "读取 .aise/progress.md，若有进行中流程询问用户"
+    },
+    "brainstorm": {
+      "type": "skill",
+      "description": "需求澄清与文档产出",
+      "skill": "aise-brainstorming",
+      "outputs": ["docs/works/prd/<task>.md", ".aise/plan.md"]
+    },
+    "plan_mode": {
+      "type": "human_approval",
+      "description": "展示计划摘要，等待用户 ExitPlanMode 批准",
+      "tool": "EnterPlanMode"
+    },
+    "run_init": {
+      "type": "script",
+      "description": "锁定 plan + 分配 run_id + snapshot",
+      "script": "aise_run_init.py",
+      "args_template": "--project-root \"$(pwd)\" --task-title-override \"$ARGUMENTS\""
+    },
+    "planning": {
+      "type": "skill",
+      "description": "任务分割为 DAG，产出 plan.json + plan.md",
+      "skill": "aise-planning-with-files",
+      "outputs": [".aise/plan.json", ".aise/plan.md"]
+    },
+    "task_loop": {
+      "type": "foreach",
+      "description": "对每个任务执行 TDD 循环（Red → Green → Refactor → Scope Gate）",
+      "items": "$tasks",
+      "template": "single-task-workflow"
+    },
+    "verify": {
+      "type": "script",
+      "description": "客观验证门禁（硬门禁）— 测试 + 证据签收",
+      "script": "aise_verify.py"
+    },
+    "review": {
+      "type": "skill",
+      "description": "多 Persona 审查（软门禁），并行派发独立审查",
+      "skill": "aise-ce-review"
+    },
+    "fuse": {
+      "type": "script",
+      "description": "智能熔断检查",
+      "script": "aise_fuse.py"
+    },
+    "sediment": {
+      "type": "skill",
+      "description": "知识沉淀——提取经验 + 落 patterns",
+      "skill": "aise-ce-compound",
+      "also_run": "aise_sediment.py"
+    },
+    "dashboard": {
+      "type": "script",
+      "description": "生成健康度报表",
+      "script": "aise_dashboard.py",
+      "outputs": ["~/Documents/reports/YYYY-MM-DD-aise-health.md"]
+    }
+  },
+  "edges": [
+    {"from": "env_init",    "to": "brainstorm"},
+    {"from": "brainstorm",  "to": "plan_mode"},
+    {"from": "plan_mode",   "to": "run_init"},
+    {"from": "run_init",    "to": "planning"},
+    {"from": "planning",    "to": "task_loop"},
+    {"from": "task_loop",   "to": "verify"},
+    {"from": "verify",      "to": "review",    "condition": "exit_code == 0"},
+    {"from": "verify",      "to": "task_loop", "on_failure": true},
+    {"from": "review",      "to": "fuse"},
+    {"from": "fuse",        "to": "sediment", "condition": "exit_code == 0"},
+    {"from": "fuse",        "to": "task_loop", "condition": "exit_code == 1"},
+    {"from": "sediment",    "to": "dashboard"}
+  ]
+}

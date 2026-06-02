@@ -125,3 +125,25 @@ def run(
     if not junit_ok:
         return 2, summary
     return (0 if test_ok else 1), summary
+
+
+SPEC = {
+    "name": "jest-junit",
+    "default_allowed_patterns": [
+        "*.test.js", "*.test.ts", "*.spec.js", "*.spec.ts",
+        "**/*.test.js", "**/*.test.ts",
+        "tests/**", "__tests__/**", "src/**", ".",
+    ],
+    "default_targets": [],
+    "accepts_targets": True,
+}
+
+
+def invoke(ctx) -> tuple[int, dict]:
+    return run(
+        project_root=ctx.project_root,
+        targets=ctx.targets,
+        out_dir=ctx.out_dir,
+        run_id=ctx.run_id,
+        extra_args=ctx.extra.get("jest_extra_arg", []),
+    )

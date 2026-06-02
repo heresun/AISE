@@ -1,41 +1,69 @@
 """Pipe Runner 插件注册
 
-自动发现 lib/runners/ 下所有 runner 模块，构建 pipe_name → run() 函数映射。
-新增 pipe 只需在 lib/runners/ 下新建 *_runner.py 文件，无需修改本文件或核心代码。
+真·遍历 lib/runners/ 下所有 *_runner.py 模块，收集每个模块导出的
+SPEC（元数据）+ run（执行函数）+ invoke（统一入口）。
+新增 pipe = 新建一个 *_runner.py 文件（含 SPEC/run/invoke），无需改本文件或核心代码（开闭原则）。
 """
 
 from __future__ import annotations
 
 import importlib
-import os
-from typing import Callable, Dict
+import pkgutil
+from pathlib import Path
+from typing import Callable, Dict, Optional
 
 
-RUNNERS: Dict[str, Callable] = {}
+_RUNNERS: Dict[str, Callable] = {}
+_SPECS: Dict[str, dict] = {}
+_INVOKES: Dict[str, Callable] = {}
+_LOADED = False
 
 
-def _discover_runners() -> Dict[str, Callable]:
-    registry: Dict[str, Callable] = {
-        "go-test-json-to-junit": ("lib.runners.go_test_runner", "run"),
-        "mvn-surefire": ("lib.runners.mvn_surefire_runner", "run"),
-        "pytest-junitxml": ("lib.runners.pytest_runner", "run"),
-        "jest-junit": ("lib.runners.jest_runner", "run"),
-        "cargo-test-junit": ("lib.runners.cargo_test_runner", "run"),
-        "cargo-nextest-junit": ("lib.runners.cargo_nextest_runner", "run"),
-    }
-
-    result: Dict[str, Callable] = {}
-    for pipe_name, (module_path, fn_name) in registry.items():
+def _discover() -> None:
+    global _LOADED
+    pkg_dir = Path(__file__).resolve().parent
+    for mod_info in pkgutil.iter_modules([str(pkg_dir)]):
+        name = mod_info.name
+        if not name.endswith("_runner"):
+            continue
         try:
-            mod = importlib.import_module(module_path)
-            result[pipe_name] = getattr(mod, fn_name)
-        except (ImportError, AttributeError):
-            pass
-    return result
+            mod = importlib.import_module(f"lib.runners.{name}")
+        except ImportError:
+            continue
+        spec = getattr(mod, "SPEC", None)
+        if not isinstance(spec, dict) or "name" not in spec:
+            continue
+        pipe = spec["name"]
+        _SPECS[pipe] = spec
+        run_fn = getattr(mod, "run", None)
+        if callable(run_fn):
+            _RUNNERS[pipe] = run_fn
+        invoke_fn = getattr(mod, "invoke", None)
+        if callable(invoke_fn):
+            _INVOKES[pipe] = invoke_fn
+    _LOADED = True
 
 
-def get_runner(pipe_name: str):
-    global RUNNERS
-    if not RUNNERS:
-        RUNNERS = _discover_runners()
-    return RUNNERS.get(pipe_name)
+def _ensure() -> None:
+    if not _LOADED:
+        _discover()
+
+
+def get_runner(pipe_name: str) -> Optional[Callable]:
+    _ensure()
+    return _RUNNERS.get(pipe_name)
+
+
+def get_spec(pipe_name: str) -> Optional[dict]:
+    _ensure()
+    return _SPECS.get(pipe_name)
+
+
+def get_invoke(pipe_name: str) -> Optional[Callable]:
+    _ensure()
+    return _INVOKES.get(pipe_name)
+
+
+def all_specs() -> Dict[str, dict]:
+    _ensure()
+    return dict(_SPECS)
